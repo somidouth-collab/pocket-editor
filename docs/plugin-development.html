@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="description" content="Plugin development — Pocket Editor documentation by Somi Douth"><title>Plugin development · Pocket Editor Docs</title><link rel="stylesheet" href="assets/docs.css"><script src="assets/search-index.js" defer></script><script src="assets/docs.js" defer></script></head>
+<body><a class="skip" href="#content">Skip to content</a><header class="topbar"><a class="brand" href="index.html"><b class="brand-mark">P</b><span>Pocket Editor <small>DOCUMENTATION</small></span></a><div class="search-wrap"><label class="sr-only" for="doc-search">Search documentation</label><input id="doc-search" type="search" placeholder="Search documentation…" autocomplete="off" aria-controls="search-results" aria-expanded="false"><div id="search-results" hidden></div><span class="sr-only" id="search-status" aria-live="polite"></span></div><button id="theme-toggle" type="button" aria-label="Switch color theme">Theme</button><button id="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Menu</button></header><div class="layout"><aside id="sidebar"><p class="nav-label">THE GUIDE</p><nav aria-label="Documentation"><a href="index.html"><span>Start here</span><small>Overview</small></a><a href="editor.html"><span>Using the editor</span><small>Editor</small></a><a href="plugins.html"><span>Plugin catalog</span><small>Plugins</small></a><a href="terminal.html"><span>Project Terminal</span><small>Terminal</small></a><a href="ai.html"><span>AI Chat &amp; Code</span><small>AI</small></a><a href="custom-ai.html"><span>Your own AI plugin</span><small>AI</small></a><a href="plugin-development.html" aria-current="page"><span>Plugin development</span><small>Developers</small></a><a href="build-your-ai.html"><span>AI builder prompt</span><small>Developers</small></a><a href="php.html"><span>PHP tools &amp; examples</span><small>Languages</small></a><a href="reference.html"><span>Shortcuts &amp; troubleshooting</span><small>Reference</small></a><a href="team-work.html"><span>Team Projects &amp; Git</span><small>Collaboration</small></a><a href="handbook.html"><span>Full project handbook</span><small>Reference</small></a></nav><div class="author"><strong>Somi Douth</strong><a href="mailto:somidouth@gmail.com">somidouth@gmail.com</a><span>Local docs · no account required</span></div></aside><main id="content" tabindex="-1"><div class="eyebrow">Developers / POCKET EDITOR</div><article><h1 id="pocket-editor-plugin-development">Pocket Editor plugin development</h1>
+<h2 id="start-with-plugin-builder">Start with Plugin Builder</h2>
+<ol>
+<li>Open Extensions → Plugin Builder… (restart the editor or choose Extensions → Load New Plugins if the builder is newly installed).</li>
+<li>Enter a unique plugin ID such as <code>my_tools</code>, a command label, and an optional description.</li>
+<li>Choose Simple command, Text transform, Tool window, or Events and services.</li>
+<li>Review Code preview. Previewing validates and compiles the generated source without running it.</li>
+<li>Click Create &amp; load. The builder creates <code>pocket_editor_plugins/&lt;plugin_id&gt;.py</code>, loads it, and opens its source in a file tab. Existing files are never overwritten.</li>
+<li>Run your command from Extensions. Add a shortcut button through Extensions → Add to toolbar.</li>
+<li>Edit the source and save it. Restart the editor to apply changes to a plugin already loaded. Load New Plugins loads only files not already loaded; it does not reload edited plugins.</li>
+</ol>
+<p>The builder needs only Python and Tkinter. Templates are starting points, not a package installer or an AI code generator.</p>
+<h2 id="minimal-plugin">Minimal plugin</h2>
+<div class="code-block"><div class="code-top"><span>python</span><button class="copy-code" type="button">Copy</button></div><pre><code>from tkinter import messagebox
+
+
+def register(api):
+    def run():
+        messagebox.showinfo(&quot;My command&quot;, f&quot;{len(api.get_text()):,} characters&quot;)
+
+    api.add_command(&quot;My command&quot;, run)</code></pre></div>
+<p>Place this file directly in <code>pocket_editor_plugins</code> beside <code>pocket_editor.py</code>. Files beginning with <code>_</code> are helpers and are not loaded as plugins. The filename stem is the plugin ID. Use a distinct command label so users can recognize your plugin.</p>
+<p>The loader executes each Python file, then calls <code>register(api)</code>. Commands are installed after registration succeeds. Keep imports and registration quick; do expensive work when a command runs. A plugin runs with the editor&#x27;s permissions: install code you trust. <code>--safe-mode</code> starts without plugins.</p>
+<h2 id="public-pluginapi-reference">Public PluginAPI reference</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">API</th><th scope="col">Behavior</th></tr></thead><tbody>
+<tr><td><code>api.plugin_id</code></td><td>Plugin ID, derived from the filename stem.</td></tr>
+<tr><td><code>api.add_command(label, callback)</code></td><td>Register a nonempty menu label and a callable taking no arguments. Call during <code>register</code>.</td></tr>
+<tr><td><code>api.get_text()</code></td><td>Return the entire active tab as a string, excluding Tk&#x27;s automatic trailing newline.</td></tr>
+<tr><td><code>api.replace_text(text)</code></td><td>Replace the active tab&#x27;s text as one undo group. Marks it modified; does not save to disk. Requires a string.</td></tr>
+<tr><td><code>api.get_path()</code></td><td>Return the active tab&#x27;s <code>pathlib.Path</code>, or <code>None</code> for an untitled tab.</td></tr>
+<tr><td><code>api.list_plugins()</code></td><td>Return sorted loaded plugin IDs as a tuple.</td></tr>
+<tr><td><code>api.on(event, callback)</code></td><td>Subscribe to an event; returns a callable that unsubscribes. Callback receives keyword arguments including <code>source</code>.</td></tr>
+<tr><td><code>api.emit(event, **payload)</code></td><td>Queue an event for idle delivery to loaded plugins. The editor supplies <code>source=api.plugin_id</code>; do not put <code>source</code> in payload.</td></tr>
+<tr><td><code>api.provide_service(name, callback)</code></td><td>Register a synchronous service named <code>plugin_id.name</code>. Names must be nonempty and contain no dot. Duplicate names in a plugin are rejected.</td></tr>
+<tr><td><code>api.list_services()</code></td><td>Return sorted qualified service names as a tuple.</td></tr>
+<tr><td><code>api.call_service(&quot;plugin_id.name&quot;, *args, **kwargs)</code></td><td>Call a loaded service and return its result. Raises <code>LookupError</code> when unavailable.</td></tr>
+<tr><td><code>api.on_cleanup(callback)</code></td><td>Register a no-argument cleanup callback, run in reverse order on editor exit or failed plugin registration.</td></tr>
+</tbody></table></div>
+<p>These APIs and Tk operations must be used on the GUI thread. <code>list_plugins()</code> and <code>list_services()</code> reflect plugins that have finished loading; dependencies may not yet be available during registration. Resolve optional services when commands run and catch <code>LookupError</code>.</p>
+<h2 id="events">Events</h2>
+<div class="code-block"><div class="code-top"><span>python</span><button class="copy-code" type="button">Copy</button></div><pre><code>def register(api):
+    def saved(source, path, **payload):
+        print(&quot;Saved&quot;, path, &quot;from&quot;, source)
+
+    api.on(&quot;document_saved&quot;, saved)</code></pre></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Event</th><th scope="col">Source / payload</th></tr></thead><tbody>
+<tr><td><code>document_changed</code></td><td>Core source <code>editor</code>, no required extra fields; queued and coalesced for edits and tab switches. Some plugins also emit this event.</td></tr>
+<tr><td><code>document_switched</code></td><td>Core source <code>editor</code>, no extra fields; delivered when selecting another tab.</td></tr>
+<tr><td><code>document_saved</code></td><td>Core source <code>editor</code>, <code>path</code> string. Delivery is queued; another tab may be active by delivery time.</td></tr>
+<tr><td><code>plugin_loaded</code></td><td>Loaded plugin&#x27;s ID as source, <code>plugin_id</code> string.</td></tr>
+<tr><td><code>document_formatted</code></td><td>Formatter plugin source; payload varies by formatter.</td></tr>
+<tr><td><code>project_changed</code></td><td>Project plugin source; payload varies, including file actions or project directory.</td></tr>
+</tbody></table></div>
+<p>Use callbacks accepting <code>**payload</code> for compatibility with extra fields. Namespaced custom events such as <code>my_tools.completed</code> avoid collisions. Do not emit the same event unconditionally from its handler: that creates an endless feedback loop. Subscription cleanup is automatic; use the unsubscribe callable when you want to stop earlier.</p>
+<h2 id="services">Services</h2>
+<div class="code-block"><div class="code-top"><span>python</span><button class="copy-code" type="button">Copy</button></div><pre><code>def register(api):
+    api.provide_service(&quot;word_count&quot;, lambda: len(api.get_text().split()))
+
+    def show_count():
+        try:
+            count = api.call_service(&quot;other_plugin.word_count&quot;)
+        except LookupError:
+            return  # Optional dependency is not loaded.
+        print(count)
+
+    api.add_command(&quot;Use another plugin&quot;, show_count)</code></pre></div>
+<p>Service calls are synchronous. Keep them short and handle failures at the caller. There is no manifest, automatic dependency installation, or dependency-order resolver; plugin files load in filename order.</p>
+<h2 id="two-plugins-communicating">Two plugins communicating</h2>
+<p>The builder&#x27;s Plugin communication tab lists loaded plugins and their available services. Refresh services after loading another plugin. The Events and services template publishes <code>&lt;plugin_id&gt;.word_count</code>, sends <code>&lt;plugin_id&gt;.counted</code> when its command runs, and forwards saves as <code>&lt;plugin_id&gt;.observed_save</code>.</p>
+<p>For a complete example, create an Events and services plugin with ID <code>counter</code>. Then create <code>counter_view.py</code> with this code:</p>
+<div class="code-block"><div class="code-top"><span>python</span><button class="copy-code" type="button">Copy</button></div><pre><code>from tkinter import messagebox
+
+
+def register(api):
+    def counted(source, count, **payload):
+        # Called asynchronously after counter emits its counted event.
+        print(f&quot;{source} counted {count} words&quot;)
+
+    api.on(&quot;counter.counted&quot;, counted)
+
+    def show_count():
+        # Service calls return a result immediately on the GUI thread.
+        try:
+            count = api.call_service(&quot;counter.word_count&quot;)
+        except LookupError:
+            messagebox.showinfo(&quot;Counter&quot;, &quot;Load the counter plugin first.&quot;)
+            return
+        messagebox.showinfo(&quot;Counter&quot;, f&quot;{count:,} words in the active tab&quot;)
+
+    api.add_command(&quot;Show shared word count&quot;, show_count)</code></pre></div>
+<p>Choose Extensions → Load New Plugins. Run counter&#x27;s command to send an event to <code>counter_view</code>; run Show shared word count to request counter&#x27;s service. Both use the active file tab. Events carry notifications; services return requested values. Plugins need no direct Python imports of one another. Calls belong in command callbacks rather than module-level code, because the other plugin may still be loading.</p>
+<h2 id="gui-tools-and-cleanup">GUI tools and cleanup</h2>
+<p>The Tool window template uses <code>api._editor.root</code>, an internal integration interface used by bundled plugins. This is distinct from the public API above and may change. Prefer <code>ttk</code> widgets to inherit the editor theme. Keep one window instance, raise it when the command is repeated, and register a cleanup callback to destroy it.</p>
+<p>The editor&#x27;s <code>api._editor.buffer</code> is a stable interface forwarding to the selected tab. Do not cache a tab&#x27;s text, path, selection, or cursor and later assume that tab is still active. Read them when a command runs. Each tab keeps its own text, tags, undo history, and cursor. Plain-text saving does not preserve rich-text styles; use a formatted copy for those.</p>
+<p>For slow work, capture inputs on the GUI thread, use a worker for computation or I/O, and return results through a queue polled with <code>root.after</code> from the GUI thread. Workers must not call Tk or PluginAPI methods. Before applying a result, verify the captured document generation and revision against <code>api._editor.document_generation</code> and <code>api._editor.document_revision</code>; discard stale results after edits or tab switches. These counters are internal integration details. Stop workers, cancel scheduled callbacks, close windows, and remove custom bindings in <code>on_cleanup</code>. Do not block shutdown indefinitely.</p>
+<h2 id="test-and-troubleshoot">Test and troubleshoot</h2>
+<ul>
+<li>Test a generated transform with <code>transform(&quot;Hello&quot;)</code> before wiring up more UI.</li>
+<li>Use a scratch file. Run the command, switch tabs, and check Undo, unsaved markers, and Save.</li>
+<li>For windows, repeat the command and close/reopen the window; verify editor shutdown.</li>
+<li>For services, check <code>list_services()</code> and handle missing dependencies.</li>
+<li>A syntax/import/registration error appears in Plugin loading errors. Fix the file and restart, or use Load New Plugins if that file never loaded successfully.</li>
+<li>A command exception appears in Plugin error. Registration failures roll back registered API commands/services/subscriptions and invoke registered cleanup callbacks; external side effects require your own cleanup.</li>
+<li>If startup fails because of custom code, launch <code>python3 -B pocket_editor.py --safe-mode</code>, fix the plugin, and restart normally.</li>
+</ul>
+<p>Run the builder tests from the project directory on a graphical desktop:</p>
+<div class="code-block"><div class="code-top"><span>sh</span><button class="copy-code" type="button">Copy</button></div><pre><code>python3 -B -m unittest -v test_plugin_builder</code></pre></div>
+<h2 id="inspect-with-plugin-manager">Inspect with Plugin Manager</h2>
+<p>Settings → Plugin Manager lists installed plugins and shows registered commands, subscribed events, callable services, and recorded registration/command errors. Enable or disable startup loading there. Disable takes effect after restart for already-loaded plugins; Load new plugins can load newly enabled or repaired plugins that have not loaded successfully yet. Safe mode still provides this manager through Settings. Inspect a plugin&#x27;s services before connecting it to another plugin, and use the builder&#x27;s Plugin communication tab for a combined service list.</p>
+<h2 id="optional-project-tools">Optional project tools</h2>
+<p><code>git_project.ensure_repository(folder)</code> synchronously checks a local folder, initializes Git if missing, registers the actual working-tree root, and returns that root as a Path. It works before the Git window opens and does not clone, stage, commit, or contact a remote. Existing repositories are reused, including when a subfolder is supplied. Invalid existing Git metadata produces an error instead of being replaced.</p>
+<p><code>git_project.get_repository()</code> returns the registered root or None. It does not return an uninitialized typed folder. <code>git_project.get_project()</code> is a compatibility alias. <code>git_project.open_project(folder)</code> prepares/registers the folder and opens the independent Git UI. Services run on the GUI thread; local setup commands use bounded timeouts and setup is refused while another Git operation is running.</p>
+<div class="code-block"><div class="code-top"><span>python</span><button class="copy-code" type="button">Copy</button></div><pre><code>root = api.call_service(&quot;git_project.ensure_repository&quot;, project_folder)
+# Other plugins can retrieve the same registered root later:
+root = api.call_service(&quot;git_project.get_repository&quot;)</code></pre></div>
+<p>Subscribe to <code>git_project.repository_changed</code> to observe registration changes. The payload contains <code>path</code> (string) and <code>initialized</code> (bool), plus the usual <code>source</code>. Resolve optional services when a user invokes a command and handle LookupError if Git Project is unavailable. Handle ValueError, OSError, or RuntimeError for invalid paths, missing Git, and Git failures.</p>
+<p>The Git plugin works without Project Explorer or Team Project. Project Explorer Actions → Git Project selects, prepares, and registers its chosen folder. <code>team_project.open_project(folder)</code> separately opens hosted project collaboration and refuses to switch an active connection.</p></article><footer>Created by Somi Douth · Built with Python and Tkinter <button class="print-doc" type="button">Print / save PDF</button></footer></main><aside class="toc"><p class="nav-label">ON THIS PAGE</p><nav aria-label="On this page"><a class="level-2" href="#start-with-plugin-builder">Start with Plugin Builder</a><a class="level-2" href="#minimal-plugin">Minimal plugin</a><a class="level-2" href="#public-pluginapi-reference">Public PluginAPI reference</a><a class="level-2" href="#events">Events</a><a class="level-2" href="#services">Services</a><a class="level-2" href="#two-plugins-communicating">Two plugins communicating</a><a class="level-2" href="#gui-tools-and-cleanup">GUI tools and cleanup</a><a class="level-2" href="#test-and-troubleshoot">Test and troubleshoot</a><a class="level-2" href="#inspect-with-plugin-manager">Inspect with Plugin Manager</a><a class="level-2" href="#optional-project-tools">Optional project tools</a></nav></aside></div></body></html>

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="description" content="Plugin catalog — Pocket Editor documentation by Somi Douth"><title>Plugin catalog · Pocket Editor Docs</title><link rel="stylesheet" href="assets/docs.css"><script src="assets/search-index.js" defer></script><script src="assets/docs.js" defer></script></head>
+<body><a class="skip" href="#content">Skip to content</a><header class="topbar"><a class="brand" href="index.html"><b class="brand-mark">P</b><span>Pocket Editor <small>DOCUMENTATION</small></span></a><div class="search-wrap"><label class="sr-only" for="doc-search">Search documentation</label><input id="doc-search" type="search" placeholder="Search documentation…" autocomplete="off" aria-controls="search-results" aria-expanded="false"><div id="search-results" hidden></div><span class="sr-only" id="search-status" aria-live="polite"></span></div><button id="theme-toggle" type="button" aria-label="Switch color theme">Theme</button><button id="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Menu</button></header><div class="layout"><aside id="sidebar"><p class="nav-label">THE GUIDE</p><nav aria-label="Documentation"><a href="index.html"><span>Start here</span><small>Overview</small></a><a href="editor.html"><span>Using the editor</span><small>Editor</small></a><a href="plugins.html" aria-current="page"><span>Plugin catalog</span><small>Plugins</small></a><a href="terminal.html"><span>Project Terminal</span><small>Terminal</small></a><a href="ai.html"><span>AI Chat &amp; Code</span><small>AI</small></a><a href="custom-ai.html"><span>Your own AI plugin</span><small>AI</small></a><a href="plugin-development.html"><span>Plugin development</span><small>Developers</small></a><a href="build-your-ai.html"><span>AI builder prompt</span><small>Developers</small></a><a href="php.html"><span>PHP tools &amp; examples</span><small>Languages</small></a><a href="reference.html"><span>Shortcuts &amp; troubleshooting</span><small>Reference</small></a><a href="team-work.html"><span>Team Projects &amp; Git</span><small>Collaboration</small></a><a href="handbook.html"><span>Full project handbook</span><small>Reference</small></a></nav><div class="author"><strong>Somi Douth</strong><a href="mailto:somidouth@gmail.com">somidouth@gmail.com</a><span>Local docs · no account required</span></div></aside><main id="content" tabindex="-1"><div class="eyebrow">Plugins / POCKET EDITOR</div><article><h1 id="bundled-plugin-catalog">Bundled plugin catalog</h1>
+<p>Every loadable plugin in the source tree is listed below. Helpers beginning with <code>_</code> are not standalone plugins. Commands and service/event names are extracted from the Python syntax tree without executing plugins. Event lists show statically declared names, not every dynamic event.</p>
+<h2 id="plugins">Plugins</h2>
+<p>Python files in <code>pocket_editor_plugins/</code> define <code>register(api)</code>. Plugin IDs are filename stems. Plugins load in filename order and repeated Load New Plugins does not register them twice.</p>
+<p>The API supports commands, text access/replacement, paths, events, services, and discovery. <code>api.list_services()</code> returns qualified service names. <code>api.on_cleanup(callback)</code> registers cleanup for failed registration or editor exit. Event callbacks and service calls execute on the GUI thread. Event payload key <code>source</code> is reserved. Plugins are trusted Python code; plugins that access private editor internals must register cleanup for their own side effects.</p>
+<p>The terminal is an output-only shell runner. Its output queue and retained text are bounded; retained text is limited to 200,000 characters and individual long lines retain their last 8,192 characters. Stop and application exit terminate the process group on POSIX. Deliberately detached processes are outside this guarantee. Windows process-tree handling needs platform verification.</p>
+<p>Regex searches run in a disposable Python process with a 0.5-second execution timeout and a 100,000-match limit. A search may briefly pause the GUI while that bounded operation completes. Syntax highlighting pauses above 300,000 document characters.</p>
+<h2 id="plugin-builder">Plugin Builder</h2>
+<p>Use <strong>Extensions → Plugin Builder…</strong> to preview, create, and load a command, text transform, tool window, or event/service plugin. Existing plugin files are protected from overwriting. See <a href="plugin-development.html">Plugin development and API reference</a> for the tutorial, templates, events, services, cleanup, testing, and reload workflow.</p>
+<h2 id="plugin-manager">Plugin Manager</h2>
+<p>Choose <strong>Extensions → Plugin Manager…</strong>, <strong>Settings → Plugin Manager…</strong>, or find it through Ctrl+Shift+P. Search by plugin ID or status, select a plugin, and inspect its path, registered commands, subscribed events, services, and latest loading or command error. Open source opens the file in an editor tab. Refresh rescans installed plugins; Load new plugins retries failed registrations and loads newly enabled plugins that have not already loaded.</p>
+<p>Enable/Disable persists startup preferences in <code>disabled_plugins</code> in the editor settings. Disabling a loaded plugin takes effect after restarting; it does not remove running callbacks or existing menu commands mid-session. Enabling an unloaded plugin allows Load new plugins to load it. Edited plugins that already loaded require a restart. Failed settings writes roll back the requested toggle. Runtime errors remain visible until restart; successful registration clears a previous loading error.</p>
+<p>In <code>--safe-mode</code>, use <strong>Settings → Plugin Manager…</strong> to disable a broken plugin, then restart normally. Loading remains disabled while in safe mode. The manager reports the current process&#x27;s registered events and services, not a dependency manifest or every event a plugin might emit. Helpers beginning with <code>_</code> are excluded.</p>
+<p>Run <code>python3 -B -m unittest -v test_plugin_manager</code> for startup preferences, safe mode, plugin communication inspection, error retry, and settings-failure checks.</p>
+<h2 id="inline-syntax-diagnostics">Inline syntax diagnostics</h2>
+<p>The <strong>syntax_diagnostics</strong> plugin checks saved Python (<code>.py</code>, <code>.pyw</code>, <code>.pyi</code>) and JSON (<code>.json</code>) filenames after a 450 ms typing pause. Checks use the current unsaved buffer, run in a background worker, and never execute user code. The first syntax error gets a red underline and a clickable line/column message below the editor. Fixing the error clears the marker. Results from a changed or switched document are discarded.</p>
+<p>Search the palette for <strong>Check Syntax</strong>, <strong>Go to Syntax Error</strong>, or <strong>Toggle Automatic Syntax Checks</strong>. Manual checks remain available when automatic checks are off; that toggle lasts for the current session. Untitled and unsupported filenames are not checked automatically. Checks skip files above 200,000 characters. Python uses the running interpreter&#x27;s compiler; JSON uses Python&#x27;s built-in JSON decoder. These are syntax checks, not type checking, undefined-variable analysis, or project-wide diagnostics. Undo, saving, and file contents are unaffected by checking.</p>
+<p>Other plugins can request an asynchronous check through <code>api.call_service(&quot;syntax_diagnostics.check&quot;)</code>, inspect <code>api.call_service(&quot;syntax_diagnostics.get_status&quot;)</code>, and subscribe with <code>api.on(&quot;syntax_diagnostics.updated&quot;, callback)</code>. The completion event contains <code>source</code>, <code>path</code> (string or None), and <code>result</code> with a status/message and line/column for syntax errors. The check service queues work and returns None. Disable the plugin through Plugin Manager if needed.</p>
+<p>Choose Extensions → Load New Plugins or restart to enable it. Verify with <code>python3 -B -m unittest -v test_syntax_diagnostics</code>.</p>
+<p>The Extensions toolbar dropdown groups commands by plugin to keep the menu compact. Add to toolbar uses the same plugin groups and shared checkmarks as the menubar. Plugins with more than 18 commands continue under More… rather than producing an oversized menu. Search Commands opens the command palette for direct access to every command. The menubar&#x27;s Plugins menu remains available.</p>
+<h2 id="ai_assistant">ai_assistant</h2>
+<p>Bundled free-model AI Chat and AI Code, explicit attachments, Ask/Team workflows, history, reply caps, and provider cooldowns. Uses the packaged tools/ai scripts, with a legacy sibling fallback.</p>
+<p><strong>How to use:</strong> Configure provider credentials through /keys in tools/ai/chat_ai.py or tools/ai/code_ai.py, open AI Chat or AI Code, and Refresh models. Select Ask or Team, explicitly attach files/current document, then Send. Stop cancels the local process. Use Reply tokens only when you intend to raise the requested cap; provider limits still apply.</p>
+<p>Commands: <code>Copy conversation</code>, <code>Reset context</code>, <code>Refresh models</code>, <code>Help &amp; limits</code>, <code>AI Chat…</code>, <code>AI Code…</code>.</p>
+<p><a href="../pocket_editor_plugins/ai_assistant.py">View source</a></p>
+<h2 id="code_theme">code_theme</h2>
+<p>Dark, Light, Dracula, and Solarized Dark document themes with bounded syntax highlighting. Theme choices do not replace editor chrome.</p>
+<p><strong>How to use:</strong> Open Code Theme, choose a color scheme and language, and close the dialog. Auto selects highlighting from the filename extension. Highlighting stops above 300,000 characters; text remains editable.</p>
+<p>Commands: <code>Code Theme</code>.</p>
+<p>Services: <code>code_theme.refresh</code>.</p>
+<p>Subscribed events: <code>document_switched</code>, <code>document_changed</code>, <code>document_formatted</code>.</p>
+<p><a href="../pocket_editor_plugins/code_theme.py">View source</a></p>
+<h2 id="editor_commands">editor_commands</h2>
+<p>Fourteen everyday line-editing, tab-navigation, clipboard-path, and zoom commands. Line changes support Undo; tab closing checks unsaved edits.</p>
+<p><strong>How to use:</strong> Place the cursor on a line or select several lines, then invoke a line command from the palette. Selection ending at the next line’s column zero excludes that next line. Go to Line asks for a valid line number. Copy Path needs a saved filename. Zoom preferences persist.</p>
+<p>Commands: <code>Duplicate Line / Selection</code>, <code>Move Lines Up</code>, <code>Move Lines Down</code>, <code>Delete Lines</code>, <code>Trim Trailing Whitespace</code>, <code>Go to Line…</code>, <code>Copy File Path</code>, <code>Copy Folder Path</code>, <code>Next Tab</code>, <code>Previous Tab</code>, <code>Close Other Tabs</code>, <code>Zoom In</code>, <code>Zoom Out</code>, <code>Reset Zoom</code>.</p>
+<p><a href="../pocket_editor_plugins/editor_commands.py">View source</a></p>
+<h2 id="git_project">git_project</h2>
+<p>Independent Git tools for any project: automatic init, shared repository service, local Git settings, clone, origin, status, commits, pull, and push. Optional Explorer integration.</p>
+<p><strong>How to use:</strong> Open Git Project or use Explorer Actions. Browse selects a folder and initializes Git if absent; Set Git Folder prepares a typed path. The repository root is available through ensure_repository/get_repository services. Clone downloads a repository. Set Origin configures its remote. Save files, Refresh, select changes, and Commit Selected. Push publishes; Pull only fast-forwards and requires closed project tabs. Settings edits repository-local author identity, origin, line endings, executable-bit tracking, and commit signing; blank/Inherit uses inherited defaults.</p>
+<p>Commands: <code>Git Project</code>.</p>
+<p>Services: <code>git_project.open_project</code>, <code>git_project.ensure_repository</code>, <code>git_project.get_repository</code>, <code>git_project.get_project</code>.</p>
+<p>Published events: <code>git_project.repository_changed</code>, <code>project_changed</code>.</p>
+<p><a href="../pocket_editor_plugins/git_project.py">View source</a></p>
+<h2 id="my_ai_example">my_ai_example</h2>
+<p>Independent customizable AI tool with Responses/Chat Completions, provider settings, model discovery, explicit file attachments, and local request limits.</p>
+<p><strong>How to use:</strong> Open My AI Example and click Settings. Select a preset/API format, enter an API key if required, refresh models or type an exact model ID, and set limits. Use + Files for up to four UTF-8 snapshots and the active-tab checkbox for unsaved editor context. Enter sends, Shift+Enter adds a line, and Open reply creates a new unsaved document.</p>
+<p>Commands: <code>My AI Example…</code>.</p>
+<p>Services: <code>my_ai_example.get_status</code>.</p>
+<p>Published events: <code>my_ai_example.reply</code>.</p>
+<p><a href="../pocket_editor_plugins/my_ai_example.py">View source</a></p>
+<h2 id="php_completion">php_completion</h2>
+<p>PHP completion through the local Intelephense language server, with snippets, project/library configuration, and stale-result protection.</p>
+<p><strong>How to use:</strong> Choose Open Project, open a PHP-family file, and press Ctrl+Space or type an identifier. Navigate suggestions with arrows, accept with Enter/Tab, and dismiss with Escape. Settings controls automatic delay, limits, PHP version, and additional library folders. Use Reindex PHP Project after external filesystem changes.</p>
+<p>Commands: <code>PHP Completion</code>, <code>PHP Completion Settings</code>, <code>PHP Completion Help</code>, <code>Reindex PHP Project</code>.</p>
+<p>Services: <code>php_completion.complete</code>, <code>php_completion.status</code>.</p>
+<p>Subscribed events: <code>document_changed</code>, <code>document_saved</code>, <code>project_changed</code>.</p>
+<p><a href="../pocket_editor_plugins/php_completion.py">View source</a></p>
+<h2 id="php_formatter">php_formatter</h2>
+<p>Prettier PHP formatting of the active buffer with one-step Undo; does not save the document to disk.</p>
+<p><strong>How to use:</strong> Open a PHP-family document, invoke Format PHP, review the buffer, and Save separately. Use PHP Format Settings for print width and target version. Missing local Node dependencies or invalid syntax leave the text unchanged. Undo reverts a formatting change.</p>
+<p>Commands: <code>Format PHP</code>, <code>PHP Format Settings</code>.</p>
+<p>Services: <code>php_formatter.format</code>, <code>php_formatter.busy</code>.</p>
+<p>Published events: <code>document_formatted</code>.</p>
+<p><a href="../pocket_editor_plugins/php_formatter.py">View source</a></p>
+<h2 id="plugin_builder">plugin_builder</h2>
+<p>Preview and create a simple command, text transform, tool window, or event/service plugin. Exclusive creation protects existing files.</p>
+<p><strong>How to use:</strong> Choose a unique lowercase plugin ID, command label, description, and template. Inspect Code preview and Documentation, then Create &amp; load. A source tab opens for editing. Restart after changing an already-loaded plugin. The Plugin communication page lists loaded IDs/services; Refresh services updates it.</p>
+<p>Commands: <code>Plugin Builder…</code>.</p>
+<p><a href="../pocket_editor_plugins/plugin_builder.py">View source</a></p>
+<h2 id="project_explorer">project_explorer</h2>
+<p>Project tree with Open/Save/Load project controls, file operations, and launchers for independent Git and hosted teamwork.</p>
+<p><strong>How to use:</strong> Choose Open Project and select a folder. Expand the tree and double-click a file, or press Enter. Use Actions or the context menu for New File, New Folder, Rename, Delete, and Refresh. Rename is also available through F2. File operations require explicit UI actions and retain unsaved-file protection.</p>
+<p>Commands: <code>Open Project Folder…</code>, <code>Load Project…</code>, <code>Save Project</code>, <code>Save Project As…</code>, <code>Git Project…</code>, <code>Team Project…</code>, <code>Open File</code>, <code>New File…</code>, <code>New Folder…</code>, <code>Rename…</code>, <code>Delete…</code>, <code>Refresh</code>, <code>Project Explorer</code>, <code>Open Project</code>, <code>Load Project</code>, <code>Save Project As</code>.</p>
+<p>Services: <code>project_explorer.get_project</code>, <code>project_explorer.open_project</code>.</p>
+<p>Subscribed events: <code>project_changed</code>.</p>
+<p>Published events: <code>project_changed</code>, <code>document_changed</code>.</p>
+<p><a href="../pocket_editor_plugins/project_explorer.py">View source</a></p>
+<h2 id="project_terminal">project_terminal</h2>
+<p>Output-only system-shell runner with stop controls, per-project commands, ANSI rendering, semantic categories, and portable appearance preferences.</p>
+<p><strong>How to use:</strong> Set a working directory and command, then Run. Stop terminates the process group where supported. Save Project Command remembers the command for that directory. Settings configures presets, ANSI colors, categories, font/encoding, and force-color. This runner has no interactive input.</p>
+<p>Commands: <code>Project Terminal</code>, <code>Project Terminal Settings…</code>.</p>
+<p>Services: <code>project_terminal.show</code>, <code>project_terminal.get_settings</code>.</p>
+<p>Published events: <code>terminal_settings_changed</code>, <code>command_finished</code>.</p>
+<p><a href="../pocket_editor_plugins/project_terminal.py">View source</a></p>
+<h2 id="python_formatter">python_formatter</h2>
+<p>Python formatting using optional Black, with settings and Undo. Black must be installed in the editor’s interpreter.</p>
+<p><strong>How to use:</strong> Open a Python document and choose Format Python. Review the buffer, use Undo if needed, and Save separately. Python Format Settings selects a line length from 40 to 200. Black can also use project configuration and fmt: off regions. A missing Black dependency produces an error rather than silently changing tools.</p>
+<p>Commands: <code>Format Python</code>, <code>Python Format Settings</code>.</p>
+<p>Services: <code>python_formatter.format</code>.</p>
+<p>Published events: <code>document_formatted</code>.</p>
+<p><a href="../pocket_editor_plugins/python_formatter.py">View source</a></p>
+<h2 id="rich_text">rich_text</h2>
+<p>Text styles and formatted .pocket copies. Plain-text Save does not preserve formatting. Text Undo is available; formatting Undo is not implemented.</p>
+<p><strong>How to use:</strong> Select text before applying Bold, Italic, Underline, Strikeout, font, size, text color, or highlighting. Paragraph alignment affects the relevant paragraphs. Clear Formatting removes rich tags from the selection. Save Formatted Copy creates a .pocket file; Open Formatted loads one into a new tab. Formatting changes require a formatted copy to preserve them.</p>
+<p>Commands: <code>Rich Text</code>.</p>
+<p><a href="../pocket_editor_plugins/rich_text.py">View source</a></p>
+<h2 id="search_replace">search_replace</h2>
+<p>Find and replace with previous/next navigation, regex options, and bounded regex execution in a disposable process.</p>
+<p><strong>How to use:</strong> Open Search &amp; Replace, enter the search and optional replacement, choose case/regex options, then use Next or Previous. Replace selects the next match before replacing if no matching active result is selected; Replace All works on the active document. Regex replacements support capture references. Invalid expressions and bounded-search failures are shown without replacing the document.</p>
+<p>Commands: <code>Search &amp; Replace</code>.</p>
+<p>Published events: <code>document_changed</code>.</p>
+<p><a href="../pocket_editor_plugins/search_replace.py">View source</a></p>
+<h2 id="syntax_diagnostics">syntax_diagnostics</h2>
+<p>Non-executing Python/JSON syntax checks in a worker, error markers, jump-to-error, and a status/check service.</p>
+<p><strong>How to use:</strong> Save or open a Python/JSON filename, then edit. After the debounce pause, the first syntax error is underlined and its message appears below the editor. Click the message or invoke Go to Syntax Error. Check Syntax runs manually; Toggle Automatic Syntax Checks affects this session. Checks skip buffers over 200,000 characters and never execute source.</p>
+<p>Commands: <code>Check Syntax</code>, <code>Go to Syntax Error</code>, <code>Toggle Automatic Syntax Checks</code>.</p>
+<p>Services: <code>syntax_diagnostics.get_status</code>, <code>syntax_diagnostics.check</code>.</p>
+<p>Subscribed events: <code>document_changed</code>, <code>document_switched</code>, <code>document_saved</code>.</p>
+<p>Published events: <code>syntax_diagnostics.updated</code>.</p>
+<p><a href="../pocket_editor_plugins/syntax_diagnostics.py">View source</a></p>
+<h2 id="team_project">team_project</h2>
+<p>Host/client project copies, individual keys, portable client invitations, modern group chat, and audio/video/file exchange.</p>
+<p><strong>How to use:</strong> Choose Host a project or Join as client. Host mode shows its actual listen port and suggests a LAN address. Easy Internet Setup detects OS/CPU, installs a checksum-verified user-local cloudflared, and starts a temporary HTTPS relay. Only a verified relay URL is filled into invitations. It also exports setup commands/scripts. Client mode loads an invitation; no client listening port is needed. Details shows local and peer endpoints; the host client list shows last observed IPs/source ports. Under Project Copies, generate a named client key and export a .team-invite using a reachable server URL. Detect My Public IP is at the top for both roles before connecting and uses HTTPS fallback services with visible DNS/network errors; Use HTTPS IP sets the invitation address only after an explicit click. HTTPS and actual inbound reachability must be configured separately. The client loads that invitation, chooses a local copy folder, and clicks Join Team. Use Group Chat and Shared Files to communicate, and Project Copies to pull or send saved file changes.</p>
+<p>Commands: <code>Team Project</code>.</p>
+<p>Services: <code>team_project.open_project</code>.</p>
+<p><a href="../pocket_editor_plugins/team_project.py">View source</a></p>
+<h2 id="text_formatting">text_formatting</h2>
+<p>Preview transformations for selection or document: case changes, whitespace cleanup, indentation, sorting, and duplicate-line removal.</p>
+<p><strong>How to use:</strong> Select a region or leave no selection to target the whole document. Open Text Formatting, choose an operation and indentation width, and review the preview. Apply Formatting performs an undoable change. If the document or selected range changed while the dialog was open, reopen the formatter instead of applying stale results.</p>
+<p>Commands: <code>Text Formatting</code>.</p>
+<p><a href="../pocket_editor_plugins/text_formatting.py">View source</a></p>
+<h2 id="word_count">word_count</h2>
+<p>Counts words in the selected document and displays the result.</p>
+<p><strong>How to use:</strong> Choose Count words to count whitespace-separated words in the whole active document, including unsaved edits. A text selection does not restrict this count.</p>
+<p>Commands: <code>Count words</code>.</p>
+<p><a href="../pocket_editor_plugins/word_count.py">View source</a></p></article><footer>Created by Somi Douth · Built with Python and Tkinter <button class="print-doc" type="button">Print / save PDF</button></footer></main><aside class="toc"><p class="nav-label">ON THIS PAGE</p><nav aria-label="On this page"><a class="level-2" href="#plugins">Plugins</a><a class="level-2" href="#plugin-builder">Plugin Builder</a><a class="level-2" href="#plugin-manager">Plugin Manager</a><a class="level-2" href="#inline-syntax-diagnostics">Inline syntax diagnostics</a><a class="level-2" href="#ai_assistant">ai_assistant</a><a class="level-2" href="#code_theme">code_theme</a><a class="level-2" href="#editor_commands">editor_commands</a><a class="level-2" href="#git_project">git_project</a><a class="level-2" href="#my_ai_example">my_ai_example</a><a class="level-2" href="#php_completion">php_completion</a><a class="level-2" href="#php_formatter">php_formatter</a><a class="level-2" href="#plugin_builder">plugin_builder</a><a class="level-2" href="#project_explorer">project_explorer</a><a class="level-2" href="#project_terminal">project_terminal</a><a class="level-2" href="#python_formatter">python_formatter</a><a class="level-2" href="#rich_text">rich_text</a><a class="level-2" href="#search_replace">search_replace</a><a class="level-2" href="#syntax_diagnostics">syntax_diagnostics</a><a class="level-2" href="#team_project">team_project</a><a class="level-2" href="#text_formatting">text_formatting</a><a class="level-2" href="#word_count">word_count</a></nav></aside></div></body></html>

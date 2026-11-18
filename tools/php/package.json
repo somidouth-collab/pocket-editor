@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@prettier/plugin-php": "0.26.0",
+    "intelephense": "1.18.5",
+    "prettier": "3.10.1"
+  },
+  "name": "pocket-editor-php-tools",
+  "private": true,
+  "description": "Optional local PHP formatting and completion tools for Pocket Editor"
+}

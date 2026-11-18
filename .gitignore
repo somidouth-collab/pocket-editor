@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+tools/php/node_modules/
+pocket_editor_settings.json
+pocket_editor_plugins/*_settings.json
+audit-backup-*/
+tools/php/cache/
+
+# Private runtime data and release output
+*.team-invite
+pocket_editor_session*
+pocket_editor_about.json
+.env
+.env.*
+dist/
+build/
+audit/
+old/
+testp/

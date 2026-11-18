@@ -1,0 +1,5 @@
+{
+  "name": "pocket-editor/php-demo",
+  "description": "Editor fixture: PSR-4 classes, use aliases and included functions",
+  "autoload": {"psr-4": {"PocketDemo\\": "src/"}, "files": ["includes/helpers.php"]}
+}
