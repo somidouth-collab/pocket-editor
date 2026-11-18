@@ -4,6 +4,13 @@ Created by **Somi Douth** · [somidouth@gmail.com](mailto:somidouth@gmail.com)
 
 A portable Python 3.9+ / Tkinter editor. The core editor needs only Tkinter. Python formatting optionally uses Black. The PHP plugins use a separate local Node.js tool installation (Prettier PHP and Intelephense).
 
+## Downloads and support
+
+- [Download releases](https://github.com/somidouth-collab/pocket-editor/releases)
+- [Installation guide](INSTALL.md)
+- [Report bugs and request features](https://github.com/somidouth-collab/pocket-editor/issues)
+- [SourceForge project](https://sourceforge.net/projects/pocket-editor/)
+
 ## Launch
 
 ```sh
