@@ -361,3 +361,7 @@ Host mode now includes direct **Install Relay**, **Start Internet Sharing**, and
 Author: **Somi Douth** · [somidouth@gmail.com](mailto:somidouth@gmail.com).
 
 Build a portable source archive with `python3 -B tools/build_release.py`. It includes the editor, plugins, packaged AI backend source, optional PHP dependency manifests, examples, tests, and offline Help. It excludes private settings, recovery drafts, invitation keys, caches, installed packages/executables, old backups, and local demo projects. See [Publishing](PUBLISHING.md) and [release notes](RELEASE_NOTES.md).
+
+## PyPI packaging
+
+A wheel and source distribution can be built with `python -B tools/build_pypi.py` after installing `build` in a dedicated environment. See [PyPI publishing](PYPI_PUBLISHING.md) for account setup and the GitHub Trusted Publishing workflow. The packaged launcher runs the editor from a writable per-user directory.

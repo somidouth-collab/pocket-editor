@@ -1,0 +1,2 @@
+include README.md pyproject.toml
+recursive-include pocket_editor_app *.py *.md *.html *.css *.js *.cjs *.mjs *.php *.json *.txt *.png *.svg

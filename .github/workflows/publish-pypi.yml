@@ -1,0 +1,48 @@
+name: Build and publish PyPI package
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified package to PyPI
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install build twine
+      - run: python -B -m unittest -v test_release test_pypi
+      - run: python -B tools/build_pypi.py
+      - run: python -m twine check --strict dist/pypi/*
+      - run: python -B tools/check_pypi.py dist/pypi
+      - run: python -m pip install --no-deps dist/pypi/*.whl
+      - run: pocket-editor --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-distributions
+          path: dist/pypi/*
+          if-no-files-found: error
+  publish:
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pocket-editor
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypi-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

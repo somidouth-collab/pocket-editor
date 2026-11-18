@@ -12,9 +12,9 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_DOCS = {'README.md','TEAM_WORK.md','PLUGIN_DEVELOPMENT.md','AUTHOR.md','RELEASE_NOTES.md','PUBLISHING.md','INSTALL.md','LICENSE','LICENSE.md','.gitignore'}
+ROOT_DOCS = {'README.md','TEAM_WORK.md','PLUGIN_DEVELOPMENT.md','AUTHOR.md','RELEASE_NOTES.md','PUBLISHING.md','INSTALL.md','PYPI_PUBLISHING.md','LICENSE','LICENSE.md','.gitignore'}
 CORE_MODULES = {'pocket_editor.py','editor_about.py','editor_session.py','command_palette.py','quick_open.py','split_editor.py','plugin_manager.py'}
-EXTENSIONS = {'.py','.md','.html','.css','.js','.cjs','.mjs','.php','.json','.txt','.png','.svg'}
+EXTENSIONS = {'.py','.md','.html','.css','.js','.cjs','.mjs','.php','.json','.txt','.png','.svg','.toml','.in','.yml','.yaml'}
 SKIP_DIRS = {'.git','__pycache__','node_modules','cache','dist','build','audit','old','testp','.venv','venv'}
 
 
@@ -30,7 +30,7 @@ def collect_files(root=ROOT):
     files=[]
     for path in root.iterdir():
         if path.is_file() and eligible(path) and (path.name in CORE_MODULES or (path.name.startswith('test_') and path.suffix=='.py') or path.name in ROOT_DOCS):files.append(path)
-    for directory in ('pocket_editor_plugins','tools','examples','docs'):
+    for directory in ('pocket_editor_plugins','tools','examples','docs','packaging','.github'):
         start=root/directory
         if not start.is_dir():continue
         for current, folders, names in os.walk(start,followlinks=False):
