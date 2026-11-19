@@ -263,3 +263,11 @@ Build a portable source archive with `python3 -B tools/build_release.py`. It inc
 ## PyPI packaging
 
 A wheel and source distribution can be built with `python -B tools/build_pypi.py` after installing `build` in a dedicated environment. See [PyPI publishing](PYPI_PUBLISHING.md) for account setup and the GitHub Trusted Publishing workflow. The packaged launcher runs the editor from a writable per-user directory.
+
+## Codex Assistant
+
+Use **Extensions → Codex Assistant…** to run tasks through your installed Codex CLI and its existing login. Read-only is the default; project edits require an explicit checkbox and closed project tabs. See [Codex setup and examples](docs/CODEX.md).
+
+## Shared loading animation
+
+Codex, AI and Git display a reusable animated orbit during work. Other plugins can use `loading_indicator.start`, `update`, and `stop`. See the [loading service guide](docs/LOADING.md).

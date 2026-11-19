@@ -13,6 +13,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from pocket_editor_plugins._loading import begin, end
+
 MAX_ATTACHMENTS = 4
 
 SETTINGS_PATH = Path(__file__).with_name('ai_assistant_settings.json')
@@ -240,6 +242,7 @@ class AIAssistant:
         self.provider_keys = {}
         self.profiles = {}
         self.pending_prompt = None
+        self.loading = None
         self.used, self.busy, self.pause_until = 0, False, 0
         self.last_reply = ''
         self.attachments = []
@@ -387,6 +390,7 @@ class AIAssistant:
         self.send.pack(side='right')
         self.status = ttk.Label(body, text='Ready · configure your provider in Settings', style='MyAI.Muted.TLabel', wraplength=600)
         self.status.pack(fill='x', pady=(8, 6))
+        self.loading_area = ttk.Frame(body, style='MyAI.TFrame'); self.loading_area.pack(fill='x')
         footer = ttk.Frame(body, style='MyAI.TFrame'); footer.pack(fill='x')
         ttk.Label(footer, text='Enter to send · Shift+Enter for a new line', style='MyAI.Muted.TLabel').pack(side='left')
         ttk.Button(footer, text='Open reply', command=self.open_reply).pack(side='right')
@@ -563,6 +567,7 @@ class AIAssistant:
         self.used += 1
         self.send.configure(state='disabled'); self.models_button.configure(state='disabled')
         self.status.configure(text='Loading model catalog…')
+        self.loading = begin(self.api, 'Loading AI models…', parent=self.loading_area)
         threading.Thread(target=self.worker, args=(config, key, None, (config['endpoint'], config['protocol'])), daemon=True).start()
 
     def current_config(self):
@@ -617,6 +622,7 @@ class AIAssistant:
         except ValueError as error:
             messagebox.showerror('AI Assistant', str(error), parent=self.window)
             return
+        self.loading = begin(self.api, "Waiting for AI reply…", parent=self.loading_area)
         self.pending_prompt = prompt
         self.config, self.busy = config, True
         self.used += 1
@@ -664,6 +670,7 @@ class AIAssistant:
             pass
         else:
             self.busy = False
+            end(self.api, self.loading); self.loading = None
             if not event['ok'] and self.pending_prompt and not self.prompt.get('1.0', 'end-1c').strip():
                 self.prompt.insert('1.0', self.pending_prompt)
             self.pending_prompt = None
@@ -702,6 +709,7 @@ class AIAssistant:
             self.api.replace_text(self.last_reply)
 
     def cleanup(self):
+        end(self.api, self.loading); self.loading = None
         self.provider_keys.clear()
         self.stopped.set()
         if self.poll_job:

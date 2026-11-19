@@ -18,7 +18,8 @@ class PyPITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             stage = stage_project(Path(temp) / "source")
             payload = stage / "pocket_editor_app/_payload"
-            for name in ["pocket_editor.py", "docs/index.html", "pocket_editor_plugins/ai_assistant.py",
+            for name in ["pocket_editor.py", "docs/index.html", "docs/CODEX.md", "docs/LOADING.md",
+                         "pocket_editor_plugins/codex_assistant.py", "pocket_editor_plugins/loading_indicator.py", "pocket_editor_plugins/ai_assistant.py",
                          "tools/php/package-lock.json", "pocket_editor_plugins/team_project.py"]:
                 self.assertTrue((payload / name).is_file(), name)
             names = [p.relative_to(payload).as_posix() for p in payload.rglob("*") if p.is_file()]

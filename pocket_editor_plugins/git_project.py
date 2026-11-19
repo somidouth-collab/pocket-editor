@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pocket_editor_plugins import _git_executable as git_runtime
+from pocket_editor_plugins._loading import begin, end
 from pocket_editor_plugins._git_settings import FIELDS, CHOICES, read_settings, save_settings, normalize
 
 
@@ -93,6 +94,8 @@ class GitProject:
         self.root = self.editor.root
         self.window = None
         self.runner = GitRunner()
+        self.loading = None
+        self.loading_area = None
         self.results = queue.Queue()
         self.busy = False
         self.closed = False
@@ -156,6 +159,7 @@ class GitProject:
             self.button(actions, label, callback).pack(side="left", padx=(0, 6))
         self.status = tk.StringVar(value="Choose a repository or clone your team's URL.")
         ttk.Label(body, textvariable=self.status, wraplength=700).pack(anchor="w", pady=(0, 8))
+        self.loading_area = ttk.Frame(body); self.loading_area.pack(fill="x")
         table = ttk.Frame(body)
         table.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(table, columns=("state", "path"), show="headings",
@@ -379,6 +383,7 @@ class GitProject:
         if self.busy or self.closed:
             return
         self.set_busy(True)
+        self.loading = begin(self.api, title + "…", parent=self.loading_area)
         self.status.set(title + "…")
         generation = self.generation
         def work():
@@ -397,6 +402,7 @@ class GitProject:
             while True:
                 generation, title, result, error, done = self.results.get_nowait()
                 self.set_busy(False)
+                end(self.api, self.loading); self.loading = None
                 if error:
                     self.status.set(title + " failed. See details below.")
                     self.log(error)
@@ -676,6 +682,7 @@ class GitProject:
         self.start("Push", task, done)
 
     def cleanup(self):
+        end(self.api, self.loading); self.loading = None
         if self.setup_window is not None and self.setup_window.winfo_exists():
             self.setup_window.destroy()
         self.close_settings()

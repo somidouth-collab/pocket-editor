@@ -161,3 +161,7 @@ root = api.call_service("git_project.get_repository")
 Subscribe to `git_project.repository_changed` to observe registration changes. The payload contains `path` (string) and `initialized` (bool), plus the usual `source`. Resolve optional services when a user invokes a command and handle LookupError if Git Project is unavailable. Handle ValueError, OSError, or RuntimeError for invalid paths, missing Git, and Git failures.
 
 The Git plugin works without Project Explorer or Team Project. Project Explorer Actions → Git Project selects, prepares, and registers its chosen folder. `team_project.open_project(folder)` separately opens hosted project collaboration and refuses to switch an active connection.
+
+## Shared loading indicator
+
+Use the GUI-thread services `loading_indicator.start(message="Working…")`, `loading_indicator.update(token, progress=0.5)`, and `loading_indicator.stop(token)`. Stop on both success/failure and plugin cleanup. See [the loading guide](docs/LOADING.md) for optional-dependency adapters, embedding, and concurrent operations.
