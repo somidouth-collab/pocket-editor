@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install build twine
-      - run: python -B -m unittest -v test_release test_pypi
+      - run: python -B -m unittest -v test_release test_pypi test_ai_assistant.ProtocolTests test_ai_assistant.GeminiTests test_git_executable
       - run: python -B tools/build_pypi.py
       - run: python -m twine check --strict dist/pypi/*
       - run: python -B tools/check_pypi.py dist/pypi
@@ -31,9 +31,17 @@ jobs:
           name: pypi-distributions
           path: dist/pypi/*
           if-no-files-found: error
+  windows-compatibility:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -B -m unittest -v test_git_executable test_ai_assistant.ProtocolTests test_ai_assistant.GeminiTests
   publish:
     if: inputs.publish && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, windows-compatibility]
     runs-on: ubuntu-latest
     environment:
       name: pypi

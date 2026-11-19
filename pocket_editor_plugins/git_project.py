@@ -1,34 +1,40 @@
 """Standalone Git tools for any local project; optional Project Explorer integration."""
 import os
+import json
+import sys
+import webbrowser
 from pathlib import Path
 import queue
 import subprocess
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from pocket_editor_plugins import _git_executable as git_runtime
 from pocket_editor_plugins._git_settings import FIELDS, CHOICES, read_settings, save_settings, normalize
 
 
 class GitRunner:
     """One cancellable Git command at a time; never invokes a shell."""
     def __init__(self):
+        self.executable = git_runtime.saved_executable()
         self.lock = threading.Lock()
         self.process = None
         self.closed = False
 
     def run(self, folder, arguments, timeout=120):
+        executable = git_runtime.find_git(self.executable)
         environment = os.environ.copy()
         environment.update(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="Never",
                            GIT_EDITOR="true", GIT_MERGE_AUTOEDIT="no")
         environment.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=15")
         with self.lock:
             if self.closed:
-                raise RuntimeError("Team Project has stopped.")
+                raise RuntimeError("Git Project has stopped.")
             if self.process is not None:
                 raise RuntimeError("Another Git operation is running.")
             process = subprocess.Popen(
-                ["git", "-C", str(folder), *arguments], stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
+                [executable, "-C", str(folder), *arguments], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment, **git_runtime.process_options())
             self.process = process
         try:
             try:
@@ -101,6 +107,7 @@ class GitProject:
         self.config_vars = {}
         self.config_repo = None
         self.config_loaded = False
+        self.setup_window = None
         api.add_command("Git Project", self.show)
         api.provide_service("open_project", self.open_project)
         api.provide_service("ensure_repository", self.ensure_repository)
@@ -123,6 +130,10 @@ class GitProject:
         ttk.Label(body, text="Git Project", style="Heading.TLabel").pack(anchor="w")
         ttk.Label(body, text="Select a folder to prepare Git and share its repository with other plugins.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 12))
+        setup_row = ttk.Frame(body)
+        setup_row.pack(fill="x", pady=(0, 10))
+        ttk.Button(setup_row, text="Git setup…", command=self.show_git_setup).pack(side="right")
+        ttk.Label(setup_row, text="Windows 10/11: detect installed Git or install it here.", style="Muted.TLabel").pack(side="left")
         self.folder = tk.StringVar(value=self.project_folder())
         location = ttk.Frame(body)
         location.pack(fill="x")
@@ -172,6 +183,63 @@ class GitProject:
         self.job = self.root.after(80, self.poll)
         if self.folder.get():
             self.refresh()
+
+    def show_git_setup(self):
+        if self.setup_window is not None and self.setup_window.winfo_exists():
+            self.setup_window.deiconify(); self.setup_window.lift(); return
+        window = self.setup_window = tk.Toplevel(self.window)
+        window.title('Git setup — installed Git or Windows installation')
+        window.geometry('760x340'); window.minsize(620, 320)
+        body = ttk.Frame(window, padding=18); body.pack(fill='both', expand=True)
+        ttk.Label(body, text='Git executable', style='Title.TLabel').pack(anchor='w')
+        self.git_path = tk.StringVar(window, self.runner.executable)
+        ttk.Entry(body, textvariable=self.git_path).pack(fill='x', pady=8)
+        row = ttk.Frame(body); row.pack(fill='x')
+        ttk.Button(row, text='Detect installed Git', command=self.detect_git).pack(side='left')
+        ttk.Button(row, text='Browse git.exe…', command=self.browse_git).pack(side='left', padx=8)
+        ttk.Button(row, text='Use this executable', command=self.use_git).pack(side='left')
+        ttk.Label(body, text='Detection checks PATH, standard Git for Windows folders and Windows registry.\nA chosen executable is saved for this editor installation.', wraplength=700).pack(anchor='w', pady=12)
+        install = ttk.Frame(body); install.pack(fill='x')
+        ttk.Button(install, text='Open official installer', command=lambda: webbrowser.open(git_runtime.DOWNLOAD_URL)).pack(side='left')
+        self.git_install = ttk.Button(install, text='Install Git with winget', command=self.install_git)
+        self.git_install.pack(side='left', padx=8)
+        if sys.platform != 'win32': self.git_install.configure(state='disabled')
+        self.git_status = ttk.Label(body, text='Select Detect installed Git, or browse to an existing Git executable.', wraplength=700)
+        self.git_status.pack(fill='x', pady=12)
+
+    def detect_git(self):
+        if self.busy: return
+        def done(result):
+            path, version = result
+            if self.setup_window is not None and self.setup_window.winfo_exists():
+                self.git_path.set(path); self.git_status.configure(text=version + ' — click Use this executable to save.')
+        self.start('Detect installed Git', lambda: git_runtime.verify_git(), done)
+
+    def browse_git(self):
+        selected = filedialog.askopenfilename(parent=self.setup_window, title='Choose installed Git executable',
+            filetypes=[('Git executable', 'git.exe' if sys.platform == 'win32' else 'git'), ('All files', '*')])
+        if selected: self.git_path.set(selected)
+
+    def use_git(self):
+        if self.busy: return
+        selected = self.git_path.get().strip()
+        def done(result):
+            path, version = result
+            self.editor.write_data(git_runtime.SETTINGS_PATH, json.dumps({'executable': path}, indent=2).encode('utf-8'))
+            self.runner.executable = path
+            if self.setup_window is not None and self.setup_window.winfo_exists():
+                self.git_status.configure(text=version + ' — saved and ready to use.')
+            self.log('Using Git: ' + path)
+        self.start('Verify Git executable', lambda: git_runtime.verify_git(selected), done)
+
+    def install_git(self):
+        if self.busy: return
+        if not messagebox.askyesno('Install Git for Windows',
+            'Run Windows Package Manager to install Git? Windows may ask you to approve the installer. Git.Git is a winget community package; you can use Open official installer instead.', parent=self.setup_window): return
+        def done(result):
+            if self.setup_window is not None and self.setup_window.winfo_exists():
+                self.git_path.set(result[0]); self.git_status.configure(text=result[1] + ' — click Use this executable to save.')
+        self.start('Install Git for Windows', git_runtime.install_windows_git, done)
 
     def get_repository(self):
         """Return only a prepared working-tree root, independently of the GUI."""
@@ -332,6 +400,8 @@ class GitProject:
                 if error:
                     self.status.set(title + " failed. See details below.")
                     self.log(error)
+                    if self.setup_window is not None and self.setup_window.winfo_exists():
+                        self.git_status.configure(text=error)
                 elif generation == self.generation:
                     self.status.set(title + " complete.")
                     if done:
@@ -606,6 +676,8 @@ class GitProject:
         self.start("Push", task, done)
 
     def cleanup(self):
+        if self.setup_window is not None and self.setup_window.winfo_exists():
+            self.setup_window.destroy()
         self.close_settings()
         self.closed = True
         self.runner.close()

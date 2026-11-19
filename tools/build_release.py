@@ -65,7 +65,7 @@ def build_release(root=ROOT,output=None,version=None):
     files=collect_files(root)
     required={'pocket_editor.py','editor_about.py','README.md','docs/index.html',
               'pocket_editor_plugins/team_project.py','pocket_editor_plugins/git_project.py',
-              'tools/ai/chat_ai.py','tools/ai/code_ai.py'}
+              'pocket_editor_plugins/ai_assistant.py','pocket_editor_plugins/python_tools.py'}
     present={path.relative_to(root).as_posix() for path in files}
     missing=required-present
     if missing:raise ValueError('Missing release files: '+', '.join(sorted(missing)))

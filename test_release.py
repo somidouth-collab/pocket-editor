@@ -15,7 +15,7 @@ class ReleaseTests(unittest.TestCase):
                'README.md':'# Pocket Editor\n', 'docs/index.html':'<html>Pocket Editor</html>',
                'pocket_editor_plugins/team_project.py':'def register(api): pass\n',
                'pocket_editor_plugins/git_project.py':'def register(api): pass\n',
-               'tools/ai/chat_ai.py':'print("chat")\n', 'tools/ai/code_ai.py':'print("code")\n'}
+               'pocket_editor_plugins/ai_assistant.py':'print("chat")\n', 'pocket_editor_plugins/python_tools.py':'print("code")\n'}
         for name,content in files.items():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(content)
 

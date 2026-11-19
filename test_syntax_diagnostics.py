@@ -4,7 +4,7 @@ import unittest
 
 import pocket_editor as core
 import test_command_palette as fixtures
-from pocket_editor_plugins.syntax_diagnostics import Diagnostics, check_syntax
+from pocket_editor_plugins._python_diagnostics import Diagnostics, check_syntax
 
 
 class ParserTests(unittest.TestCase):

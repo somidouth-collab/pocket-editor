@@ -1,6 +1,6 @@
 # Publishing Pocket Editor on PyPI
 
-PyPI package: `pocket-editor` · version: `2026.11.18` · owner account: `somidouth`.
+PyPI package: `pocket-editor` · version: `2026.11.19` · owner account: `somidouth`.
 
 The project owner has left the license undecided. No license grant is added by this package.
 
@@ -29,7 +29,7 @@ python -m twine check --strict dist/pypi/*
 python -B tools/check_pypi.py dist/pypi
 ```
 
-The builder stages only curated source files, then uses setuptools to build a wheel and a self-contained source distribution. It bundles plugins, offline help, optional backend source, and optional PHP dependency manifests. Personal settings, session backups, invitations, node_modules, and tests are excluded from the installed application payload. The standalone source distribution can be rebuilt with `python -m build` after extraction.
+The builder stages only curated source files, then uses setuptools to build a wheel and a self-contained source distribution. It bundles plugins, offline help, AI Assistant provider adapters, and optional PHP dependency manifests. Personal settings, session backups, invitations, node_modules, and tests are excluded from the installed application payload. The standalone source distribution can be rebuilt with `python -m build` after extraction.
 
 ## Publish from GitHub
 

@@ -25,7 +25,8 @@ def format_source(source, filename, line_length):
             raise RuntimeError(
                 "Install Black in the Python environment that runs Pocket Editor.\n\n"
                 f'Python executable: {sys.executable}\n'
-                'Command: python -m pip install black\n\n'
+                'For pipx installations: pipx inject pocket-editor black\n'
+                'For a Python environment: python -m pip install black\n\n'
                 'On Debian system Python, you can use: sudo apt install black'
             )
         raise RuntimeError(error or "Black could not format this document.")
@@ -115,7 +116,8 @@ def register(api):
         ttk.Spinbox(body, from_=40, to=200, textvariable=value, width=8).grid(row=0, column=1)
         ttk.Label(body, text="Black formats the whole open Python document.\n"
                             "Use Undo to revert, then Save when ready.\n"
-                            "Black also respects project configuration and # fmt: off regions.").grid(
+                            "Black also respects project configuration and # fmt: off regions.\n"
+                            "For a pipx installation: pipx inject pocket-editor black").grid(
                                 row=1, column=0, columnspan=2, pady=14, sticky="w")
 
         def save():

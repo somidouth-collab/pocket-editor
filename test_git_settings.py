@@ -105,6 +105,18 @@ class SettingsGuiTests(fixtures.TeamGuiTests):
         self.assertFalse(self.panel.config_loaded)
         self.assertEqual(str(self.panel.config_save.cget('state')), 'disabled')
 
+    def test_git_setup_detect_choose_verify_and_persist(self):
+        from pocket_editor_plugins import _git_executable as git_runtime
+        from pathlib import Path
+        self.panel.show_git_setup()
+        with patch.object(git_runtime, 'SETTINGS_PATH', self.base / 'git_executable_settings.json'):
+            self.panel.detect_git(); self.wait_idle()
+            self.assertTrue(Path(self.panel.git_path.get()).is_file())
+            self.panel.use_git(); self.wait_idle()
+            self.assertEqual(git_runtime.saved_executable(), self.panel.runner.executable)
+            self.assertIn('saved', self.panel.git_status.cget('text'))
+        self.panel.runner.run(self.first, ['status', '--porcelain'])
+
 
 # These tests reuse the real editor/repository fixture, without rerunning the
 # independent Git workflow suite in this module.

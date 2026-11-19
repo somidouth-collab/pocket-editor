@@ -26,7 +26,7 @@ def check(directory):
             assert not base.startswith((".env", "pocket_editor_session")), name
             assert not base.endswith((".team-invite", "_settings.json", ".pyc")), name
             assert base != "pocket_editor_about.json", name
-        for required in ["pocket_editor.py", "docs/index.html", "tools/ai/chat_ai.py",
+        for required in ["pocket_editor.py", "docs/index.html", "pocket_editor_plugins/ai_assistant.py",
                          "pocket_editor_plugins/team_project.py", "INSTALL.md"]:
             assert any(name.endswith("/pocket_editor_app/_payload/" + required) or
                        name == "pocket_editor_app/_payload/" + required for name in names), required

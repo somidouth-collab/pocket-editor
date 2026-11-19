@@ -446,7 +446,7 @@ class EditorTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec('black'), 'Black is optional')
     def test_black_service_and_undo(self):
         e=self.editor; e.set_document(self.folder/'sample.py','x=  [1,2,3]\n')
-        e.plugin_apis['word_count'].call_service('python_formatter.format')
+        e.plugin_apis['word_count'].call_service('python_tools.format')
         self.pump(1.5)
         self.assertEqual(e.plugin_apis['word_count'].get_text(),'x = [1, 2, 3]\n')
         e.buffer.event_generate('<<Undo>>'); self.pump()

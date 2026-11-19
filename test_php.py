@@ -13,7 +13,7 @@ from tkinter import ttk
 import test_editor
 from pocket_editor_plugins._php_tools import (TOOLS, LanguageServer, completion_edits,
     offset_at, position_at, project_root)
-from pocket_editor_plugins.php_formatter import Formatter
+from pocket_editor_plugins._php_formatter import Formatter
 from pocket_editor_plugins._php_completion import (DEFAULTS, Capture, CompletionWorker,
     read_settings as read_completion_settings, server_config, render_snippet, prepare_completion, ranked_items)
 from pocket_editor_plugins._php_tools import CompletionCancelled
@@ -166,7 +166,7 @@ class RealToolTests(unittest.TestCase):
 class PHPGuiTests(unittest.TestCase):
     def setUp(self):
         test_editor.EditorTests.setUp(self)
-        api = self.editor.plugin_apis['php_completion']
+        api = self.editor.plugin_apis['php_tools']
         self.completion = next(callback.__self__ for label,callback in api._commands if label == 'PHP Completion')
         self.completion.settings_path = self.folder/'php-completion-settings.json'
         self.completion.settings = copy.deepcopy(DEFAULTS)
@@ -180,32 +180,32 @@ class PHPGuiTests(unittest.TestCase):
         path=self.folder/'test.php'; original='<?php\n$values= [1,2,3];echo \"hello\";\n'; path.write_text(original)
         e=self.editor; e.open_path(path)
         self.command('Format PHP')
-        self.until(lambda: not e.plugin_apis['php_formatter'].call_service('php_formatter.busy'))
-        formatted=e.plugin_apis['php_formatter'].get_text()
+        self.until(lambda: not e.plugin_apis['php_tools'].call_service('php_tools.busy'))
+        formatted=e.plugin_apis['php_tools'].get_text()
         self.assertNotEqual(formatted, original)
         self.assertEqual(path.read_text(), original)
-        e.buffer.event_generate('<<Undo>>'); self.pump(); self.assertEqual(e.plugin_apis['php_formatter'].get_text(), original)
-        e.buffer.event_generate('<<Redo>>'); self.pump(); self.assertEqual(e.plugin_apis['php_formatter'].get_text(), formatted)
+        e.buffer.event_generate('<<Undo>>'); self.pump(); self.assertEqual(e.plugin_apis['php_tools'].get_text(), original)
+        e.buffer.event_generate('<<Redo>>'); self.pump(); self.assertEqual(e.plugin_apis['php_tools'].get_text(), formatted)
         self.assertTrue(e.buffer.edit_modified())
-        self.assertNotIn('php_formatter:Format PHP', e.toolbar_commands)
+        self.assertNotIn('php_tools:Format PHP', e.toolbar_commands)
 
     def test_stale_result_and_non_php_protection(self):
         e=self.editor; e.set_document(DEMO/'demo.php', (DEMO/'demo.php').read_text())
         self.command('Format PHP')
         e.set_document(self.folder/'new.txt', 'preserve new document')
-        self.until(lambda: not e.plugin_apis['php_formatter'].call_service('php_formatter.busy'))
-        self.assertEqual(e.plugin_apis['php_formatter'].get_text(), 'preserve new document')
+        self.until(lambda: not e.plugin_apis['php_tools'].call_service('php_tools.busy'))
+        self.assertEqual(e.plugin_apis['php_tools'].get_text(), 'preserve new document')
         self.command('Format PHP'); self.assertTrue(self.showinfo.called)
         self.command('PHP Completion')
-        self.assertFalse(e.plugin_apis['php_completion'].call_service('php_completion.status')['busy'])
+        self.assertFalse(e.plugin_apis['php_tools'].call_service('php_tools.status')['busy'])
 
     def test_popup_completion_acceptance_undo_and_php_only(self):
         e=self.editor; original=(DEMO/'demo.php').read_text()+'\n$customer->disp'
         e.set_document(DEMO/'demo.php', original); e.buffer.mark_set('insert','end-1c')
-        api=e.plugin_apis['php_completion']
+        api=e.plugin_apis['php_tools']
         self.command('PHP Completion')
-        self.until(lambda: not api.call_service('php_completion.status')['busy'], timeout=35)
-        state=api.call_service('php_completion.status')
+        self.until(lambda: not api.call_service('php_tools.status')['busy'], timeout=35)
+        state=api.call_service('php_tools.status')
         self.assertFalse(state['error'], state['error'])
         self.assertIn('displayName',state['items'], str(state))
         if self.completion.worker.server.can_resolve:
@@ -215,14 +215,14 @@ class PHPGuiTests(unittest.TestCase):
         index=list(listing.get(0,'end')).index('displayName')
         listing.selection_clear(0,'end'); listing.selection_set(index)
         e.buffer.event_generate('<Return>'); self.pump()
-        self.until(lambda: not api.call_service('php_completion.status')['busy'])
+        self.until(lambda: not api.call_service('php_tools.status')['busy'])
         self.assertRegex(api.get_text(), r'\$customer->displayName(?:\(\))?$')
         e.buffer.event_generate('<<Undo>>'); self.pump(); self.assertEqual(api.get_text(),original)
         e.set_document(self.folder/'plain.py','displayName')
         e.buffer.event_generate('<Return>'); self.pump()
         self.assertEqual(api.get_text(),'\ndisplayName')
         self.assertFalse(listing.winfo_viewable())
-        pid = api.call_service('php_completion.status')['server_pid']
+        pid = api.call_service('php_tools.status')['server_pid']
         e.buffer.edit_modified(False); e.quit()
         if os.name == 'posix' and Path('/proc').is_dir():
             deadline = time.monotonic() + 3
@@ -234,51 +234,51 @@ class PHPGuiTests(unittest.TestCase):
         project = self.folder / 'php-project'
         shutil.copytree(DEMO, project)
         e = self.editor
-        api = e.plugin_apis['php_completion']
+        api = e.plugin_apis['php_tools']
         original = (project/'demo.php').read_text()
         e.set_document(project/'demo.php', original + '\n$greeter->gre')
         e.buffer.mark_set('insert', 'end-1c')
         self.command('PHP Completion')
-        self.until(lambda: not api.call_service('php_completion.status')['busy'], timeout=35)
-        self.assertIn('greetCustomer', api.call_service('php_completion.status')['items'], str(api.call_service('php_completion.status')))
+        self.until(lambda: not api.call_service('php_tools.status')['busy'], timeout=35)
+        self.assertIn('greetCustomer', api.call_service('php_tools.status')['items'], str(api.call_service('php_tools.status')))
         imported = project/'src'/'Services'/'Greeter.php'
         e.set_document(imported, imported.read_text().replace('greetCustomer', 'saluteCustomer'))
         self.assertTrue(e.save()); self.pump()
         e.set_document(project/'demo.php', original + '\n$greeter->salu')
         e.buffer.mark_set('insert', 'end-1c')
         self.command('PHP Completion')
-        self.until(lambda: not api.call_service('php_completion.status')['busy'], timeout=35)
-        self.assertIn('saluteCustomer', api.call_service('php_completion.status')['items'])
+        self.until(lambda: not api.call_service('php_tools.status')['busy'], timeout=35)
+        self.assertIn('saluteCustomer', api.call_service('php_tools.status')['items'])
 
     def test_completion_missing_runtime_and_invalid_format_leave_text(self):
         e=self.editor; e.set_document(self.folder/'broken.php','<?php function broken( {')
         self.command('Format PHP')
-        self.until(lambda: not e.plugin_apis['php_formatter'].call_service('php_formatter.busy'))
-        self.assertEqual(e.plugin_apis['php_formatter'].get_text(),'<?php function broken( {')
+        self.until(lambda: not e.plugin_apis['php_tools'].call_service('php_tools.busy'))
+        self.assertEqual(e.plugin_apis['php_tools'].get_text(),'<?php function broken( {')
         self.assertTrue(self.showerror.called)
         e.set_document(self.folder/'valid.php','<?php echo "ok";')
         with patch('pocket_editor_plugins._php_tools.shutil.which',return_value=None):
             self.command('Format PHP')
-            self.until(lambda: not e.plugin_apis['php_formatter'].call_service('php_formatter.busy'))
-        self.assertEqual(e.plugin_apis['php_formatter'].get_text(),'<?php echo "ok";')
+            self.until(lambda: not e.plugin_apis['php_tools'].call_service('php_tools.busy'))
+        self.assertEqual(e.plugin_apis['php_tools'].get_text(),'<?php echo "ok";')
         with patch('pocket_editor_plugins._php_tools.shutil.which',return_value=None):
             self.command('Reindex PHP Project')
-            self.until(lambda: not e.plugin_apis['php_completion'].call_service('php_completion.status')['busy'])
-        self.assertIn('Node.js', e.plugin_apis['php_completion'].call_service('php_completion.status')['error'])
-        self.assertEqual(e.plugin_apis['php_formatter'].get_text(),'<?php echo "ok";')
+            self.until(lambda: not e.plugin_apis['php_tools'].call_service('php_tools.status')['busy'])
+        self.assertIn('Node.js', e.plugin_apis['php_tools'].call_service('php_tools.status')['error'])
+        self.assertEqual(e.plugin_apis['php_tools'].get_text(),'<?php echo "ok";')
 
     def test_escape_cancels_popup_and_exact_cache_is_used(self):
-        e=self.editor; api=e.plugin_apis['php_completion']
+        e=self.editor; api=e.plugin_apis['php_tools']
         original=(DEMO/'demo.php').read_text()+'\n$customer->disp'
         e.set_document(DEMO/'demo.php',original); e.buffer.mark_set('insert','end-1c')
         self.command('PHP Completion')
-        self.until(lambda:not api.call_service('php_completion.status')['busy'],timeout=35)
-        self.assertIn('displayName',api.call_service('php_completion.status')['items'])
+        self.until(lambda:not api.call_service('php_tools.status')['busy'],timeout=35)
+        self.assertIn('displayName',api.call_service('php_tools.status')['items'])
         self.command('PHP Completion')
-        self.until(lambda:not api.call_service('php_completion.status')['busy'])
-        self.assertGreaterEqual(api.call_service('php_completion.status')['cache_hits'],1)
+        self.until(lambda:not api.call_service('php_tools.status')['busy'])
+        self.assertGreaterEqual(api.call_service('php_tools.status')['cache_hits'],1)
         e.plugins.invoke('PHP Completion'); e.buffer.event_generate('<Escape>'); self.pump(.5)
-        self.assertFalse(api.call_service('php_completion.status')['busy'])
+        self.assertFalse(api.call_service('php_tools.status')['busy'])
         self.assertFalse(self.completion.popup.winfo_viewable())
         self.assertEqual(api.get_text(),original)
 
@@ -296,7 +296,7 @@ class PHPGuiTests(unittest.TestCase):
         self.assertEqual(e.buffer.get('sel.first','sel.last'),'$user')
         e.buffer.event_generate('<Escape>'); self.pump()
         e.buffer.event_generate('<<Undo>>'); self.pump()
-        self.assertEqual(e.plugin_apis['php_completion'].get_text(),original)
+        self.assertEqual(e.plugin_apis['php_tools'].get_text(),original)
 
     def test_project_settings_ui_persistence(self):
         e=self.editor; e.set_document(DEMO/'demo.php','<?php'); self.pump()
@@ -316,7 +316,7 @@ class PHPGuiTests(unittest.TestCase):
         self.assertEqual(saved['projects'][str(DEMO.resolve())]['include_paths'],[str(self.folder)])
 
     def test_real_typing_and_deletion_auto_completion(self):
-        e=self.editor; api=e.plugin_apis['php_completion']; controller=self.completion
+        e=self.editor; api=e.plugin_apis['php_tools']; controller=self.completion
         source=(DEMO/'demo.php').read_text()+'\n$customer->di'
         e.set_document(DEMO/'demo.php',source); e.buffer.mark_set('insert','end-1c')
         e.buffer.focus_force(); self.pump()
@@ -330,23 +330,23 @@ class PHPGuiTests(unittest.TestCase):
             self.assertTrue(api.get_text().endswith('$customer->dis'))
             self.assertEqual(released[-1], '')
             self.assertIsNotNone(controller.pending, 'Typing did not schedule completion')
-            self.until(lambda: controller.pending is None and not api.call_service('php_completion.status')['busy']
-                       and 'displayName' in api.call_service('php_completion.status')['items'],timeout=35)
+            self.until(lambda: controller.pending is None and not api.call_service('php_tools.status')['busy']
+                       and 'displayName' in api.call_service('php_tools.status')['items'],timeout=35)
             key('p')
             self.assertIsNotNone(controller.pending)
-            self.until(lambda: controller.pending is None and not api.call_service('php_completion.status')['busy']
-                       and 'displayName' in api.call_service('php_completion.status')['items'])
+            self.until(lambda: controller.pending is None and not api.call_service('php_tools.status')['busy']
+                       and 'displayName' in api.call_service('php_tools.status')['items'])
             key('BackSpace')
             self.assertTrue(api.get_text().endswith('$customer->dis'))
             self.assertIsNotNone(controller.pending)
-            self.until(lambda: controller.pending is None and not api.call_service('php_completion.status')['busy']
-                       and 'displayName' in api.call_service('php_completion.status')['items'])
+            self.until(lambda: controller.pending is None and not api.call_service('php_tools.status')['busy']
+                       and 'displayName' in api.call_service('php_tools.status')['items'])
             e.buffer.insert('end-1c','x'); e.buffer.mark_set('insert','end-2c'); self.pump()
             key('Delete')
             self.assertTrue(api.get_text().endswith('$customer->dis'))
             self.assertIsNotNone(controller.pending)
-            self.until(lambda: controller.pending is None and not api.call_service('php_completion.status')['busy']
-                       and 'displayName' in api.call_service('php_completion.status')['items'])
+            self.until(lambda: controller.pending is None and not api.call_service('php_tools.status')['busy']
+                       and 'displayName' in api.call_service('php_tools.status')['items'])
             key('Left')
             self.assertIsNone(controller.pending, 'Cursor movement must not schedule completion')
             self.assertFalse(controller.popup.winfo_viewable())
@@ -354,8 +354,8 @@ class PHPGuiTests(unittest.TestCase):
             e.buffer.event_generate('<KeyPress>',keysym='space',state=4)
             e.buffer.event_generate('<KeyRelease>',keysym='space',state=4)
             self.assertIsNotNone(controller.ticket, 'Releasing Ctrl+Space cancelled its request')
-            self.until(lambda: not api.call_service('php_completion.status')['busy']
-                       and 'displayName' in api.call_service('php_completion.status')['items'])
+            self.until(lambda: not api.call_service('php_tools.status')['busy']
+                       and 'displayName' in api.call_service('php_tools.status')['items'])
             self.assertTrue(controller.popup.winfo_viewable())
         finally:
             e.buffer.unbind('<KeyRelease>',binding)

@@ -58,7 +58,7 @@ See [release notes](RELEASE_NOTES.md) for the release scope and [the GUI preview
 
 ## PHP formatting and completion
 
-Two independent plugins are available in Extensions:
+A single **PHP Tools** plugin provides these commands in Extensions:
 
 - **Format PHP** formats the current PHP buffer in a worker, with cursor preservation and one-step Undo. It does not write to disk. Invalid PHP, tool failure, a 30-second timeout, or a changed/switched document leaves the active text intact.
 - **PHP Format Settings** selects line width and target PHP version. Editor tab width supplies the default indentation; project Prettier and EditorConfig settings override defaults.
@@ -104,110 +104,13 @@ For your PHP code: open its folder with **Extensions → Open Project**, open a 
 
 `examples/php/advanced_completion.php` adds advanced exercises. `audit/php-completion-performance.json` records the measured demo timings: first worker request 1,178.42 ms (a persisted index may be reused), five warm requests median 14.72 ms (range 4.74–155.55 ms), and ten exact-cache repeats median 0.17 ms. These worker measurements exclude the configurable typing debounce and Tk rendering and are not a performance guarantee for large projects. Only the bundled PHP fixtures and temporary external-library projects were available for validation; no separate user application was supplied.
 
-## AI Chat and Code
+## AI Assistant
 
-The AI window matches the editor’s charcoal theme, blue accents, compact controls, and UI font family, with Chat/Code navigation and a bottom
-composer, styled user/assistant cards, lightweight Markdown and code blocks,
-removable attachment chips, and a welcome screen with draft starters. Enter sends;
-Shift+Enter inserts a newline. The composer clears only after a request starts;
-a failed start preserves the draft. AI fonts/styles are isolated from editor
-settings. The sidebar collapses in narrow windows; More keeps Copy, Reset,
-Refresh models and Help accessible. Reset context clears model history while
-keeping displayed messages available to copy. Copy preserves original Markdown
-and code text even when formatting markers are hidden in the chat display.
+Open **Extensions → AI Assistant… → Settings**. Choose your provider, enter its own API key, click **Refresh models**, select a model, and Save settings. Use **How to use** for the full [setup guide and Google Gemini example](docs/AI_ASSISTANT.md).
 
-[Conversation preview](docs/assets/previews/ai-chat-preview.png) ·
-[Welcome preview](docs/assets/previews/ai-chat-welcome.png) ·
-[Narrow-window preview](docs/assets/previews/ai-chat-narrow.png).
-These previews use offline example messages; no provider request was sent.
+Google Gemini now uses its native API format. Its preset fills `https://generativelanguage.googleapis.com/v1beta`; enter a Gemini Developer API key from Google AI Studio. The plugin builds the model URL and authenticates with Google's header. OpenAI Responses and OpenAI-compatible Ollama/OpenRouter/Groq/DeepSeek presets are also available. Each provider needs its own credentials and model access.
 
-
-Open **Extensions → AI Chat…** or **AI Code…**. The window has Chat/Code and
-Ask/Team selectors. Ask requires one model and a question. Team shows a lead
-selector and worker list; Ctrl-click workers from different developers, then
-enter the task. Workers run in displayed order. Refresh models reloads available
-models. Requests run in a separate process; Cancel stops that process.
-
-Attach current document sends a snapshot including unsaved edits. Attach files
-adds UTF-8 files. Attachments remain until cleared; no document is sent implicitly.
-Replies appear in the output pane and never overwrite a document. Copy conversation
-copies the retained visible prompts, replies and team output, excluding hidden
-attachment text. Solo histories are separate per mode/model; the latest six turns
-are stored during the session, and Reset conversations clears them. Requests send
-only the recent complete turns that fit the active fast profile. Omitted history
-is noted in the transcript; earlier visible conversation remains copyable. Team
-runs are independent.
-
-The plugin uses these conservative **fast presets**, rather than claiming a
-universal optimum for every model:
-
-| Limit | Chat | Code |
-| --- | --- | --- |
-| Task + attachments, UTF-8 | 4 KiB | 12 KiB Ask / 6 KiB Team |
-| Requested reply cap | 512 tokens | 1,536 tokens |
-| Outgoing history | Up to 2 turns / 4 KiB | Up to 3 turns / 8 KiB |
-| Attachments | 2 | 4 |
-| Team workers, excluding lead | 2 | 2 |
-| Ask timeout | 60 seconds | 120 seconds |
-| Team timeout | 120 seconds | 180 seconds |
-
-The active limits and input usage are shown in the AI window. Input byte counts
-include prompt, file headers and separators. Oversized tasks/files are rejected
-with an explanation, preserving the prompt and previous attachments. Large files
-are read only up to a bounded size. A team request whose source plus Python syntax
-check metadata exceeds the backend source budget is rejected before model calls.
-Existing provider-size retry behavior may shorten team context with a visible
-backend notice. Reply caps can leave large answers incomplete; Code asks for
-focused patches rather than full-file rewrites. Timeouts stop the local request
-process and keep displayed partial output. Model discovery has a 45-second limit.
-The shared command-line scripts are not changed; the GUI bridge supplies reply
-caps at runtime to solo, planning, worker and final-answer calls.
-
-Ask makes fewer model calls than Team. These presets target smaller requests and
-shorter replies; actual latency depends on the model/provider. No live-provider
-speed benchmark was performed. General rationale: [OpenAI latency optimization](https://developers.openai.com/api/docs/guides/latency-optimization).
-
-The plugin uses `tools/ai/chat_ai.py` and `tools/ai/code_ai.py` and their shared
-credentials. Configure keys and Free plan confirmations via `/keys` in either
-script before use. Launch the editor again, or select **Load New Plugins**.
-No API request is made until opening the assistant (model discovery) or Send.
-Run offline coverage with `python3 -B -m unittest -v test_ai_assistant` on a desktop.
-
-### AI capabilities and provider failures
-
-The AI backend now receives explicit instructions that Pocket Editor supplies only
-prompt/history/attached text. It has no tools to browse a project, read files on
-its own, write files, inspect the machine, run commands/tests, or commit changes.
-It may explain attachments and propose patches for the user to apply. Any model
-claim of direct local access is incorrect; model-generated claims do not grant
-capabilities. Earlier misleading replies are not proof of tool access.
-
-The normal fast reply caps remain 512 Chat / 1,536 Code tokens. If a model returns
-an empty visible reply, the plugin retries that same call **once**, with up to
-2,048 Chat / 3,072 Code output/reasoning tokens. A notice appears before the retry.
-This can help reasoning models that exhaust a small output budget, but does not
-guarantee success and may use an extra request/quota. No hidden reasoning is
-shown as the final answer. A second empty result produces a readable error.
-
-HTTP 429 is not automatically retried. The UI displays a provider rate-limit
-message, preserves the draft when sending is blocked, and pauses new requests
-using that provider for its Retry-After interval when available (at most one day)
-or 30 seconds otherwise. The pause is local and cannot reset a provider's quota;
-actual free-tier/shared-provider limits can last longer. Select a different
-provider or wait. Provider messages do not expose raw Python tracebacks. Failed
-team planning/finalization is marked as failed even when the command-line backend
-catches the exception; worker-only failures allow a partial result with an
-explicit status. A successful size-limit retry does not leave a stale failure.
-
-Replies and team logs use structured text events, so answer lines that resemble
-protocol markers cannot be mistaken for model lists or history records. Normal
-fast limits, Copy, the chat theme and Stop remain in place. Shared backend scripts
-were not modified.
-
-Sources: [OpenRouter reasoning/output budgets](https://github.com/OpenRouterTeam/docs/blob/main/guides/best-practices/reasoning-tokens.mdx),
-[OpenRouter error handling](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/errors-and-debugging.mdx).
-Verification used offline transports, not live provider requests; provider quota
-recovery and the reported models' current availability remain unverified.
+The old AI Chat/AI Code frontend and backends have been removed. The former My AI Example is now this single AI Assistant plugin. Settings, request limits, explicit text/code attachments, and Chat/Code modes remain. Keys are never written to settings.
 
 ## Plugin Builder
 
@@ -247,11 +150,13 @@ Run `python3 -B -m unittest -v test_plugin_manager` for startup preferences, saf
 
 ## Inline syntax diagnostics
 
+The **Python Tools** plugin combines Black formatting, Python Format Settings, and Python/JSON syntax diagnostics. Its services are `python_tools.format`, `python_tools.check`, and `python_tools.get_status`. Existing formatter settings are preserved.
+
 The **syntax_diagnostics** plugin checks saved Python (`.py`, `.pyw`, `.pyi`) and JSON (`.json`) filenames after a 450 ms typing pause. Checks use the current unsaved buffer, run in a background worker, and never execute user code. The first syntax error gets a red underline and a clickable line/column message below the editor. Fixing the error clears the marker. Results from a changed or switched document are discarded.
 
 Search the palette for **Check Syntax**, **Go to Syntax Error**, or **Toggle Automatic Syntax Checks**. Manual checks remain available when automatic checks are off; that toggle lasts for the current session. Untitled and unsupported filenames are not checked automatically. Checks skip files above 200,000 characters. Python uses the running interpreter's compiler; JSON uses Python's built-in JSON decoder. These are syntax checks, not type checking, undefined-variable analysis, or project-wide diagnostics. Undo, saving, and file contents are unaffected by checking.
 
-Other plugins can request an asynchronous check through `api.call_service("syntax_diagnostics.check")`, inspect `api.call_service("syntax_diagnostics.get_status")`, and subscribe with `api.on("syntax_diagnostics.updated", callback)`. The completion event contains `source`, `path` (string or None), and `result` with a status/message and line/column for syntax errors. The check service queues work and returns None. Disable the plugin through Plugin Manager if needed.
+Other plugins can request an asynchronous check through `api.call_service("python_tools.check")`, inspect `api.call_service("python_tools.get_status")`, and subscribe with `api.on("syntax_diagnostics.updated", callback)`. The completion event contains `source`, `path` (string or None), and `result` with a status/message and line/column for syntax errors. The check service queues work and returns None. Disable the plugin through Plugin Manager if needed.
 
 Choose Extensions → Load New Plugins or restart to enable it. Verify with `python3 -B -m unittest -v test_syntax_diagnostics`.
 
@@ -265,17 +170,9 @@ Click a pane to activate its document. Save, Undo, palette commands, plugins, an
 
 Verify with `python3 -B -m unittest -v test_split_editor`.
 
-## Custom AI plugin example
+## Customizing AI Assistant
 
-**Extensions → My AI Example…** is an independent, customizable Chat/Code plugin with a configurable compatible endpoint, model, in-memory API key, explicit active-tab attachment, reply/input/time/request limits, and reply events/status services. It sends nothing at startup and does not change the existing free-model backend. Load New Plugins or restart to enable it.
-
-See [the setup and customization guide](examples/custom_ai/README.md), [the prompt for building your own version with AI Code](examples/custom_ai/BUILD_PROMPT.md), and [the example source](pocket_editor_plugins/my_ai_example.py). Verification uses mocked responses rather than paid API calls. Local request/token caps are not monetary spending guarantees.
-
-The custom AI example also supports **OpenAI Responses**. Choose Provider → OpenAI, enter an OpenAI Platform API key (or set `OPENAI_API_KEY`), refresh the model list, and choose a compatible text/coding model. The Responses transport uses `max_output_tokens`, optional reasoning effort, and `store: false`; existing compatible Chat Completions providers remain available. Keys stay out of saved settings. Model refresh and generation are explicit actions and share the local request cap. See [the OpenAI setup steps](examples/custom_ai/README.md#test-with-an-openai-platform-api-key). Codex subscription logins and agent execution are not implemented by this plugin.
-
-The custom AI window now uses a conversation-focused layout with a separate **Settings** window for providers/keys/limits, a welcome screen, styled message blocks and code fences, a bottom composer, and Copy conversation. Enter sends; Shift+Enter adds a new line. Welcome suggestions never send automatically.
-
-The custom AI composer's **+ Files** button attaches up to four UTF-8 text/code snapshots with removable chips. Files and the optional active tab share the input budget with prompt/history. Binary/image/PDF uploads are unsupported. Remove and reattach to refresh a snapshot; Reset context clears previously sent file content from local conversation history. Selecting attachments makes no API request.
+AI Assistant source lives in `pocket_editor_plugins/ai_assistant.py`. See [its guide](docs/AI_ASSISTANT.md), [customization notes](examples/custom_ai/README.md), and [Plugin Development](PLUGIN_DEVELOPMENT.md). The shared service is `ai_assistant.get_status`; successful text replies emit `ai_assistant.reply`.
 
 ## Project Terminal colors and portable defaults
 
@@ -293,7 +190,6 @@ Plugin communication exposes `project_terminal.get_settings` and emits `terminal
 python3 -B -m unittest -v test_terminal_colors test_editor.EditorTests.test_terminal_output_fallback_stop_and_shutdown
 ```
 
-The main **AI Chat / AI Code** window now keeps the current reply intact instead of deleting its first 300 lines once the transcript exceeds 1,800 lines. Older transcript content is trimmed toward 200,000 characters without cutting the latest assistant/team reply; one large current reply can exceed that target. Code-fence formatting also survives consecutive assistant output chunks. **Reply tokens → Auto** keeps the existing conservative defaults; explicitly choose up to 8,192 for a larger requested reply cap. Provider limits/timeouts can still stop generation, and larger caps can increase usage. No extra provider request or larger default budget is introduced.
 
 Terminal presets now include **GNOME Tango** (inspired by the [GNOME Tango color palette](https://wiki.gnome.org/Design/OS/Colors)) and **Modern Graphite**, a softer dark scheme with restrained blue, green, amber, and magenta ANSI colors. Modern Graphite is the default for new settings; saved custom colors are preserved. The settings dialog previews command/error text and all 16 palette colors before Save & apply. Each preset applies its complete ANSI palette, not just its background. Restore defaults selects Modern Graphite.
 
@@ -327,6 +223,8 @@ The generator uses the Python standard library and reads source/Markdown without
 Project Explorer: Open Project selects a folder. Save Project writes a `.pocket-project` definition; Save Project As writes another copy. Load Project reopens a saved definition. These commands are available in Extensions and the explorer Actions menu. Definitions store a relative folder path when possible so the folder and definition can move together. Document contents are saved separately with File → Save or Save All.
 
 ## Git Project plugin
+
+On Windows 10/11 open **Git Project → Git setup…**. **Detect installed Git** searches PATH, standard Git for Windows locations, and registry installs. **Browse git.exe…** uses a custom or portable installation. **Use this executable** verifies and saves it. If Git is absent, **Open official installer** opens the Git website, and **Install Git with winget** offers installation through Windows Package Manager. After installation detect Git and save the selected path.
 
 **Extensions → Git Project** opens independent Git tools for any local project. Use Browse or Use Explorer to select a folder, or open it through Project Explorer → Actions → Git Project. Team Project is not required.
 

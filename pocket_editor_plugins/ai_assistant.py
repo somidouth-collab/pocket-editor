@@ -1,829 +1,716 @@
-"""Chat/Code AI frontend with packaged backends and legacy sibling fallback."""
+"""AI Assistant: Chat/Code with explicit provider configuration. See docs/AI_ASSISTANT.md."""
 import json
+import os
 from pathlib import Path
 import queue
-import subprocess
-import sys
-import time
+import re
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, font, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, quote
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-BUNDLED_SCRIPTS = Path(__file__).resolve().parents[1] / "tools/ai"
-SCRIPTS = BUNDLED_SCRIPTS if BUNDLED_SCRIPTS.is_dir() else Path(__file__).resolve().parents[2] / "scripts"
-FAST_LIMITS = {
-    "Chat": {"input_bytes": 4096, "team_input_bytes": 4096, "history_bytes": 4096,
-             "history_turns": 2, "reply_tokens": 512, "empty_retry_tokens": 2048, "attachments": 2, "workers": 2,
-             "timeout_seconds": 60, "team_timeout_seconds": 120},
-    "Code": {"input_bytes": 12288, "team_input_bytes": 6144, "history_bytes": 8192,
-             "history_turns": 3, "reply_tokens": 1536, "empty_retry_tokens": 3072, "attachments": 4, "workers": 2,
-             "timeout_seconds": 120, "team_timeout_seconds": 180},
+MAX_ATTACHMENTS = 4
+
+SETTINGS_PATH = Path(__file__).with_name('ai_assistant_settings.json')
+PROTOCOLS = ('Chat Completions', 'OpenAI Responses', 'Google Gemini')
+PRESETS = {
+    'OpenAI': ('OpenAI Responses', 'https://api.openai.com/v1/responses'),
+    'Google Gemini': ('Google Gemini', 'https://generativelanguage.googleapis.com/v1beta'),
+    'Ollama': ('Chat Completions', 'http://127.0.0.1:11434/v1/chat/completions'),
+    'OpenRouter': ('Chat Completions', 'https://openrouter.ai/api/v1/chat/completions'),
+    'Groq': ('Chat Completions', 'https://api.groq.com/openai/v1/chat/completions'),
+    'DeepSeek': ('Chat Completions', 'https://api.deepseek.com/chat/completions'),
+}
+KEY_VARIABLES = {'OpenAI': 'OPENAI_API_KEY', 'Google Gemini': 'GEMINI_API_KEY',
+                 'Ollama': 'OLLAMA_API_KEY', 'OpenRouter': 'OPENROUTER_API_KEY',
+                 'Groq': 'GROQ_API_KEY', 'DeepSeek': 'DEEPSEEK_API_KEY', 'Custom': 'CUSTOM_AI_API_KEY'}
+PROVIDER_HELP = {
+    'OpenAI': 'Use an OpenAI Platform API key. Refresh models and select a Responses-compatible text model. ChatGPT subscriptions do not supply API credits.',
+    'Google Gemini': '1. Create a Gemini API key at aistudio.google.com/apikey. 2. Paste it here. 3. Refresh models and choose a text model. 4. Save, close Settings, and Send. The endpoint stays at /v1beta; the plugin adds the model URL.',
+    'Ollama': 'Install/start Ollama on this computer, download a model with ollama pull MODEL, then Refresh models. Local Ollama normally needs no API key. Use the exact downloaded model name.',
+    'OpenRouter': 'Use an OpenRouter API key, not an OpenAI key. Refresh models and select the full provider/model ID. Access and credits depend on your OpenRouter account.',
+    'Groq': 'Create a Groq API key in the Groq console. Refresh models and select an available text model. Use the Groq endpoint, not the OpenAI endpoint.',
+    'DeepSeek': 'Create a DeepSeek API key in the DeepSeek platform. Refresh models or enter an exact current model ID. API credits are separate from website chat access.',
+    'Custom': 'Choose the provider’s API format and full endpoint. Only OpenAI-compatible chat/Responses and the native Gemini API are supported. Other native APIs need their own adapter.',
 }
 
 
-def input_size(prompt, attachments):
-    return len("\n\n".join([prompt.strip(), *attachments]).encode("utf-8"))
+def provider_for(config):
+    endpoint = config.get('endpoint', '').rstrip('/')
+    return next((name for name, (protocol, url) in PRESETS.items()
+                 if endpoint == url.rstrip('/') and config.get('protocol') == protocol), 'Custom')
 
 
-def recent_history(history, limits):
-    """Keep a contiguous suffix of complete turns; never cut a code block in half."""
-    pairs = []
-    for index in range(0, len(history)-1, 2):
-        user, answer = history[index:index+2]
-        if (isinstance(user, dict) and isinstance(answer, dict)
-                and user.get("role") == "user" and answer.get("role") == "assistant"
-                and isinstance(user.get("content"), str) and isinstance(answer.get("content"), str)):
-            pairs.append([dict(user), dict(answer)])
-    retained, size = [], 0
-    for pair in reversed(pairs[-limits["history_turns"]:]):
-        count = sum(len(message["content"].encode("utf-8")) for message in pair)
-        if size + count > limits["history_bytes"]:
-            break
-        retained[0:0] = pair
-        size += count
-    return retained
+DEFAULTS = dict(protocol='Chat Completions', reasoning='default', endpoint='http://127.0.0.1:11434/v1/chat/completions', model='',
+                reply_tokens=1024, input_bytes=65536, timeout=60, session_requests=20)
+SYSTEM_PROMPTS = {'Chat': 'You are a helpful assistant. Be clear and concise.',
+                  'Code': 'Help write and review code. Provide focused examples. Never claim to have executed code or edited files.'}
 
 
-BRIDGE = r'''
-import contextlib, io, json, runpy, sys, time
-from email.utils import parsedate_to_datetime
-
-protocol_out = sys.stdout
-keys = {}
-
-
-def emit(kind, **payload):
-    protocol_out.write("EVENT:" + json.dumps({"type": kind, **payload}) + "\n")
-    protocol_out.flush()
-
-
-def retry_delay(error):
-    current = error
-    for _ in range(4):
-        headers = getattr(current, "headers", None)
-        value = headers.get("Retry-After") if headers is not None else None
-        if value:
-            try:
-                delay = float(value) if str(value).strip().isdigit() else parsedate_to_datetime(value).timestamp() - time.time()
-                return max(1, min(86400, int(delay)))
-            except (ValueError, TypeError, OverflowError):
-                pass
-        current = getattr(current, "__cause__", None)
-        if current is None:
-            break
-    return 30
-
-
-def error_details(error, model=None):
-    status = getattr(error, "status", None)
-    provider = model.provider.name if model is not None else ""
-    label = provider + " / " + model.name if model is not None else "AI service"
-    if status == 429:
-        message = label + " is rate-limiting requests (HTTP 429). Wait before retrying or choose another provider. Provider quotas may last longer than the local pause."
-    elif status in (401, 403):
-        message = label + " rejected authentication or access. Check the provider key and model access using /keys in the AI scripts."
-    elif status == 402:
-        message = label + " reports insufficient quota or credits. Check the provider account or choose another provider."
-    elif status in (500, 502, 503, 504):
-        message = label + " is temporarily unavailable. Try later or select another provider."
-    elif "empty reply" in str(error).lower():
-        message = label + " returned no visible reply after one retry. It may need more reasoning/output tokens or be temporarily unavailable. Try another model."
-    elif isinstance(error, (ValueError, EOFError, OSError)) or type(error).__name__ == "APIError":
-        message = label + ": " + " ".join(str(error).split())[:500]
-    else:
-        message = label + " could not complete the request (" + type(error).__name__ + "). Refresh models and try again."
-    for key in keys.values():
-        if isinstance(key, str) and key:
-            message = message.replace(key, "[redacted]")
-    return {"message": message, "status": status, "provider": provider,
-            "retry_after": retry_delay(error) if status == 429 else 0}
-
-
-class TeamOutput:
-    def __init__(self): self.pending = ""
-    def write(self, value):
-        self.pending += value
-        while "\n" in self.pending:
-            line, self.pending = self.pending.split("\n", 1)
-            emit("text", text=line + "\n", role="assistant")
-        return len(value)
-    def flush(self):
-        if self.pending:
-            emit("text", text=self.pending, role="assistant")
-            self.pending = ""
-
-
-def run():
-    global keys
-    request = json.load(sys.stdin)
-    m = runpy.run_path(request["script"])
-    with contextlib.redirect_stdout(io.StringIO()) as log:
-        models, keys = m["configure"](m["load_credentials"](False))
-    if request["command"] == "list":
-        print("MODELS:" + json.dumps([{"label": x.label, "provider": x.provider.name,
-              "name": x.name, "developer": m["model_developer"](x)} for x in models]), flush=True)
-        if log.getvalue(): emit("text", text=log.getvalue(), role="notice")
-        return 0
-    def find(identity):
-        for model in models:
-            if [model.provider.name, model.name] == identity:
-                return model
-        raise ValueError("Selected model is unavailable. Refresh models and select again.")
-    attachments, prompt, limits = request["attachments"], request["prompt"], request["limits"]
-    original_ask = m["ask"]
-    lead = find(request["lead"])
-    lead_failure = None
-    worker_failures = {}
-    def fast_ask(model, key, history, prompt, max_output_tokens=None):
-        nonlocal lead_failure
-        maximum = limits["reply_tokens"]
-        if max_output_tokens is not None: maximum = min(maximum, max_output_tokens)
+def validate_config(values):
+    result = {name: values.get(name, default) for name, default in DEFAULTS.items()}
+    if result['protocol'] not in PROTOCOLS or result['reasoning'] not in ('default', 'low', 'medium', 'high'):
+        raise ValueError('Choose an API format and a supported reasoning setting.')
+    if not isinstance(result['endpoint'], str) or not isinstance(result['model'], str):
+        raise ValueError('Endpoint and model ID must be text.')
+    result['endpoint'], result['model'] = result['endpoint'].strip(), result['model'].strip()
+    url = urlsplit(result['endpoint'])
+    if url.username or url.password or url.query or url.fragment or not url.hostname:
+        raise ValueError('Use a complete API URL without credentials, query, or fragment.')
+    if url.scheme != 'https' and not (url.scheme == 'http' and url.hostname in ('localhost', '127.0.0.1', '::1')):
+        raise ValueError('Use HTTPS for remote providers; HTTP is allowed only for local loopback servers.')
+    if result['protocol'] == 'OpenAI Responses' and not url.path.rstrip('/').endswith('/responses'):
+        raise ValueError('Responses format needs a complete endpoint ending in /responses.')
+    if result['protocol'] == 'Google Gemini':
+        if not url.path.rstrip('/').endswith(('/v1beta', '/v1')):
+            raise ValueError('Gemini needs its API base URL, for example https://generativelanguage.googleapis.com/v1beta.')
+        result['model'] = result['model'].removeprefix('models/')
+        if not re.fullmatch(r'[A-Za-z0-9._-]+', result['model']):
+            raise ValueError('Choose a Gemini model ID from Refresh models; do not paste a model URL.')
+    if result['protocol'] == 'Chat Completions' and not url.path.rstrip('/').endswith('/chat/completions'):
+        raise ValueError('Chat Completions needs the full endpoint ending in /chat/completions. Select a provider preset to fill it.')
+    if not result['model'] or len(result['model']) > 200:
+        raise ValueError('Enter the provider’s exact model ID.')
+    for name, minimum, maximum in (('reply_tokens', 64, 8192), ('input_bytes', 1024, 1048576),
+                                   ('timeout', 5, 180), ('session_requests', 1, 1000)):
         try:
-            try:
-                answer = original_ask(model, key, history, prompt, max_output_tokens=maximum)
-            except Exception as error:
-                if getattr(error, "status", None) is not None or "empty reply" not in str(error).lower():
-                    raise
-                retry_maximum = limits.get("empty_retry_tokens", maximum * 2)
-                emit("notice", text="No visible reply from " + model.provider.name + " / " + model.name
-                     + ". Retrying once with up to " + str(retry_maximum) + " output/reasoning tokens.\n")
-                answer = original_ask(model, key, history, prompt, max_output_tokens=retry_maximum)
-            identity = (model.provider.name, model.name)
-            if identity == (lead.provider.name, lead.name): lead_failure = None
-            worker_failures.pop(identity, None)
-            return answer
-        except Exception as error:
-            details = error_details(error, model)
-            if request["command"] == "team":
-                if model.provider.name == lead.provider.name and model.name == lead.name:
-                    lead_failure = details
-                else:
-                    worker_failures[(model.provider.name, model.name)] = details
-                    emit("warning", **details)
-                error_type = m.get("APIError", RuntimeError)
-                if isinstance(error, error_type):
-                    raise error_type(details["message"], status=details["status"]) from None
-            emit("error", **details)
-            raise RequestFailed() from None
-    original_ask.__globals__["ask"] = fast_ask
-    original_ask.__globals__["SYSTEM_PROMPT"] = m.get("SYSTEM_PROMPT", "") + (
-        " Actual Pocket Editor capabilities: you are a text-only assistant. You receive only the user's prompt,"
-        " explicitly attached source text and retained conversation. You have NO file/project browsing, file-writing,"
-        " command-execution or test-running tools. You may explain supplied code and propose patches, which the user"
-        " must apply and verify. Never claim you can open/read/edit project files directly, inspect the environment,"
-        " run commands/tests, or commit changes. Any earlier claim of such access was incorrect."
-        " Keep replies concise; prefer focused patches over full-file rewrites."
-    )
-    if request["command"] == "team":
-        workers = [find(identity) for identity in request["workers"]]
-        developers = {m["model_developer"](lead)}
-        for worker in workers:
-            developer = m["model_developer"](worker)
-            if developer in developers: raise ValueError("Team needs one model per developer, including the lead.")
-            developers.add(developer)
-        checks = m["python_attachment_checks"](attachments) if m["CODING"] else ()
-        task = "\n\n".join([prompt, *attachments])
-        verification = "\n\nLocal Python syntax checks (no code executed):\n" + "\n".join(checks) if checks else ""
-        if len((task + verification).encode("utf-8")) > m.get("TEAM_PROMPT_BYTES", 16000) // 2:
-            raise ValueError("Task plus syntax-check metadata exceeds team source context. Attach smaller relevant excerpts.")
-        output = TeamOutput()
-        try:
-            with contextlib.redirect_stdout(output): m["run_team"](lead, workers, keys, task, checks)
-        finally: output.flush()
-        if lead_failure:
-            emit("error", **lead_failure)
-            return 1
-        if worker_failures: emit("partial", text="Finished with worker errors; only available reports were used.\n")
-    else:
-        answer = fast_ask(lead, keys.get(lead.provider, ""), request["history"], "\n\n".join([prompt, *attachments]))
-        emit("text", text=answer + "\n", role="assistant")
-        print("HISTORY:" + json.dumps([{"role": "user", "content": "\n\n".join([prompt, *attachments])},
-                                      {"role": "assistant", "content": answer}]), flush=True)
-    return 0
+            value = int(result[name])
+        except (ValueError, TypeError):
+            raise ValueError(f'{name} must be a whole number.') from None
+        if not minimum <= value <= maximum:
+            raise ValueError(f'{name} must be between {minimum} and {maximum}.')
+        result[name] = value
+    return result
 
 
-class RequestFailed(Exception): pass
-
-try:
-    exit_code = run()
-except RequestFailed:
-    exit_code = 1
-except (Exception, SystemExit) as error:
-    emit("error", **error_details(error))
-    exit_code = 1
-raise SystemExit(exit_code)
-'''
-
-
-def build_request(mode, command, models, lead_index, worker_indices, prompt, attachments, history=(), reply_tokens=None):
-    if mode not in ("Chat", "Code") or command not in ("Ask", "Team"):
-        raise ValueError("Select Chat or Code and Ask or Team.")
+def build_messages(config, mode, prompt, context='', history=()):
+    if mode not in SYSTEM_PROMPTS:
+        raise ValueError('Choose Chat or Code.')
     if not prompt.strip():
-        raise ValueError("Enter a task or question first.")
-    if not 0 <= lead_index < len(models):
-        raise ValueError("Refresh models and select a model or team lead.")
-    limits = dict(FAST_LIMITS[mode])
-    if reply_tokens is not None:
-        if type(reply_tokens) is not int or not 64 <= reply_tokens <= 8192:
-            raise ValueError("Reply cap must be between 64 and 8,192 tokens.")
-        limits['reply_tokens'] = reply_tokens
-        limits['empty_retry_tokens'] = max(reply_tokens, limits['empty_retry_tokens'])
-    worker_indices = worker_indices if command == "Team" else ()
-    if len(attachments) > limits["attachments"]:
-        raise ValueError(f"{mode} fast mode allows {limits['attachments']} attachments. Choose fewer relevant files.")
-    maximum = limits["team_input_bytes"] if command == "Team" else limits["input_bytes"]
-    size = input_size(prompt, attachments)
-    if size > maximum:
-        raise ValueError(f"Task and attachments use {size:,} UTF-8 bytes; {mode} / {command} allows {maximum:,}. Shorten the input or attach smaller excerpts.")
-    if len(worker_indices) > limits["workers"]:
-        raise ValueError(f"Fast team mode allows at most {limits['workers']} workers plus the lead.")
-    if any(type(index) is not int or not 0 <= index < len(models) for index in worker_indices):
-        raise ValueError("Select valid worker models.")
-    retained = recent_history(history, limits) if command == "Ask" else []
-    identity = lambda item: [item["provider"], item["name"]]
-    workers = [identity(models[i]) for i in worker_indices]
-    if command == "Team" and (not workers or identity(models[lead_index]) in workers):
-        raise ValueError("Select at least one worker and exclude the lead.")
-    if command == "Team":
-        developers = [models[i].get("developer", models[i]["provider"])
-                      for i in [lead_index, *worker_indices]]
-        if len(set(developers)) != len(developers):
-            raise ValueError("Choose one model per developer, including the lead.")
-    return {"script": str(SCRIPTS / ("code_ai.py" if mode == "Code" else "chat_ai.py")),
-            "command": command.lower(), "lead": identity(models[lead_index]),
-            "workers": workers, "prompt": prompt.strip(), "attachments": attachments,
-            "history": retained, "history_omitted": len(history) - len(retained) if command == "Ask" else 0,
-            "limits": limits, "timeout_seconds": limits["team_timeout_seconds"] if command == "Team" else limits["timeout_seconds"]}
+        raise ValueError('Enter a message.')
+    text = prompt.strip() + ('\n\nAttached context:\n' + context if context else '')
+    messages = [{'role': 'system', 'content': SYSTEM_PROMPTS[mode]},
+                *[dict(item) for item in history[-4:]], {'role': 'user', 'content': text}]
+    size = sum(len(item['content'].encode('utf-8')) for item in messages)
+    if size > config['input_bytes']:
+        raise ValueError(f'Input and history use {size:,} bytes; limit is {config["input_bytes"]:,}. Reset history, shorten the prompt, or raise the limit.')
+    return messages
 
 
-class Assistant:
-    def __init__(self, api):
-        self.api = api
-        self.root = api._editor.root
-        self.window = None
-        self.process = None
-        self.timer = None
-        self.models = []
-        self.histories = {}
-        self.attachments = []
-        self.mode = None
-        self.current_role = "notice"
-        self.code_block = False
-        self.cooldowns = {}
-        api.on_cleanup(self.cleanup)
+def read_attachment(path, limit):
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise ValueError('Choose a regular UTF-8 text or code file.')
+    with path.open('rb') as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f'{path.name} exceeds the input-byte limit.')
+    try:
+        text = data.decode('utf-8-sig')
+    except UnicodeError:
+        raise ValueError(f'{path.name} is not UTF-8 text. Images, PDFs, and binary files are not supported.') from None
+    if text.startswith('%PDF-') or any(ord(char) < 32 and char not in '\t\r\n' for char in text):
+        raise ValueError(f'{path.name} is a binary or unsupported document. Choose text or code.')
+    return {'path': path, 'text': text}
 
-    def theme(self):
-        """Style only AI widgets; document fonts and the editor theme stay independent."""
-        editor = self.api._editor
-        style = ttk.Style(self.window)
-        shared = getattr(editor, "ui_font", None)
-        def chrome(name, option, fallback):
-            return (style.lookup(name, option) if shared is not None else "") or fallback
-        self.colors = {"bg":chrome("TEntry", "fieldbackground", "#1e1e1e"),
-                       "side":chrome("TFrame", "background", "#252526"),
-                       "panel":chrome("TButton", "background", "#2d2d2d"),
-                       "border":"#333333", "text":chrome("TLabel", "foreground", "#cccccc"),
-                       "muted":chrome("Muted.TLabel", "foreground", "#969696"),
-                       "accent":chrome("Accent.TButton", "background", "#007acc"),
-                       "user":"#252526", "answer":"#1e1e1e"}
-        base = getattr(self.api._editor,"ui_font",None) or font.nametofont("TkDefaultFont",root=self.root)
-        self.fonts = {}
-        for name,size,weight in (("body",10,"normal"),("small",9,"normal"),
-                ("label",10,"bold"),("title",13,"bold"),("brand",11,"bold"),("bold",10,"bold")):
-            instance=base.copy(); instance.configure(size=size,weight=weight); self.fonts[name]=instance
-        self.fonts['mono']=(getattr(editor, 'editor_font', None) or font.nametofont('TkFixedFont',root=self.root)).copy()
-        self.fonts['mono'].configure(size=10)
-        c=self.colors; style=ttk.Style(self.window)
-        for name,color in (("Ai.TFrame",c['bg']),("Ai.Side.TFrame",c['side']),
-                           ("Ai.Panel.TFrame",c['panel'])):
-            style.configure(name,background=color)
-        style.configure('Ai.TLabel',background=c['bg'],foreground=c['text'],font=self.fonts['body'])
-        style.configure('Ai.Title.TLabel',background=c['bg'],foreground=c['text'],font=self.fonts['title'])
-        style.configure('Ai.Muted.TLabel',background=c['bg'],foreground=c['muted'],font=self.fonts['small'])
-        style.configure('Ai.Side.TLabel',background=c['side'],foreground=c['muted'],font=self.fonts['small'])
-        style.configure('Ai.Brand.TLabel',background=c['side'],foreground=c['text'],font=self.fonts['brand'])
-        style.configure('Ai.Panel.TLabel',background=c['panel'],foreground=c['muted'],font=self.fonts['small'])
-        style.configure('Ai.TButton',padding=(10,4),width=0,background=c['panel'],foreground=c['text'],
-                        font=self.fonts['small'],borderwidth=0,relief='flat')
-        style.map('Ai.TButton',background=[('active','#3c3c3c'),('pressed','#454545')],foreground=[('disabled','#777777')])
-        style.configure('Ai.Send.TButton',padding=(14,5),background=c['accent'],foreground='#ffffff',font=self.fonts['label'])
-        style.map('Ai.Send.TButton',background=[('disabled','#3c3c3c'),('pressed','#005a9e'),('active','#168bd2')],
-                  foreground=[('disabled','#969696'),('!disabled','#ffffff')])
-        style.configure('Ai.Quiet.TButton',background=c['side'],foreground=c['muted'],padding=(9,4))
-        style.map('Ai.Quiet.TButton',background=[('active','#353535')],foreground=[('active',c['text'])])
-        style.map('Ai.Chip.TButton',background=[('pressed','#454545'),('active','#3c3c3c')])
-        style.configure('Ai.Chip.TButton',padding=(8,3),background='#333333',foreground='#cccccc',font=self.fonts['small'])
-        style.configure('Ai.TMenubutton',background=c['panel'],foreground=c['text'],padding=(9,4),
-                        borderwidth=0,font=self.fonts['small'],arrowcolor=c['muted'])
-        style.configure('Ai.TCombobox',fieldbackground=c['panel'],background=c['panel'],foreground=c['text'],
-                        arrowcolor=c['muted'],padding=6,font=self.fonts['small'])
-        style.map('Ai.TCombobox',fieldbackground=[('readonly',c['panel'])],foreground=[('readonly',c['text']),('disabled','#777777')],
-                  selectbackground=[('readonly',c['panel'])],selectforeground=[('readonly',c['text'])])
-        style.configure('Ai.Vertical.TScrollbar',background='#424242',troughcolor=c['bg'],borderwidth=0,arrowsize=10)
-        style.map('Ai.Vertical.TScrollbar',background=[('active','#565656')])
 
-    def open(self, mode="Chat"):
-        if self.window is not None and self.window.winfo_exists():
-            self.window.lift()
-            if self.process is None:
-                self.mode.set(mode); self.fields()
-            return
-        self.window=tk.Toplevel(self.root)
-        self.window.title('Pocket AI — Chat & Code')
-        self.window.geometry('1120x820'); self.window.minsize(660,580)
-        self.window.protocol('WM_DELETE_WINDOW',self.close)
-        self.theme(); c=self.colors
-        self.window.configure(background=c['bg'])
-        self.window.columnconfigure(1,weight=1); self.window.rowconfigure(0,weight=1)
-        self.mode=tk.StringVar(self.window,mode); self.command=tk.StringVar(self.window,'Ask')
-        self.sidebar=ttk.Frame(self.window,style='Ai.Side.TFrame',padding=(12,14),width=190)
-        self.sidebar.grid(row=0,column=0,sticky='nsew'); self.sidebar.pack_propagate(False)
-        brand=ttk.Frame(self.sidebar,style='Ai.Side.TFrame'); brand.pack(fill='x',pady=(0,12))
-        mark=tk.Canvas(brand,width=3,height=20,background=c['side'],highlightthickness=0)
-        mark.pack(side='left',padx=(0,10)); mark.create_rectangle(0,0,3,20,fill=c['accent'],outline='')
-        ttk.Label(brand,text='Pocket AI',style='Ai.Brand.TLabel').pack(side='left')
-        ttk.Label(self.sidebar,text='YOUR WORKSPACE',style='Ai.Side.TLabel').pack(anchor='w',pady=(0,10))
-        self.mode_buttons=[]
-        for name,caption in (('Chat','Chat & questions'),('Code','Code assistant')):
-            button=ttk.Button(self.sidebar,text=caption,style='Ai.TButton',command=lambda name=name:self.set_mode(name))
-            button.pack(fill='x',pady=3); self.mode_buttons.append((name,button))
-        ttk.Label(self.sidebar,text='CONVERSATION',style='Ai.Side.TLabel').pack(anchor='w',pady=(20,8))
-        self.reset_button=ttk.Button(self.sidebar,text='Reset context',command=self.reset,style='Ai.Quiet.TButton')
-        self.reset_button.pack(fill='x',pady=3)
-        ttk.Button(self.sidebar,text='Copy conversation',command=self.copy_conversation,style='Ai.Quiet.TButton').pack(fill='x',pady=3)
-        footer=ttk.Frame(self.sidebar,style='Ai.Side.TFrame'); footer.pack(side='bottom',fill='x')
-        ttk.Label(footer,text='Only attached files are sent.\nReplies never edit your files.',style='Ai.Side.TLabel',wraplength=170).pack(anchor='w',pady=(0,14))
-        self.refresh=ttk.Button(footer,text='Refresh models',command=self.load_models,style='Ai.Quiet.TButton')
-        self.refresh.pack(fill='x',pady=3)
-        ttk.Button(footer,text='Help & limits',command=self.help,style='Ai.Quiet.TButton').pack(fill='x',pady=3)
-        self.main=ttk.Frame(self.window,style='Ai.TFrame',padding=(16,14))
-        self.main.grid(row=0,column=1,sticky='nsew'); self.main.columnconfigure(0,weight=1); self.main.rowconfigure(2,weight=1)
-        self.main.bind('<Configure>',self.resize_content)
-        header=ttk.Frame(self.main,style='Ai.TFrame'); header.grid(row=0,column=0,sticky='ew',pady=(0,12))
-        header.columnconfigure(0,weight=1)
-        self.heading=ttk.Label(header,text='Code workspace',style='Ai.Title.TLabel'); self.heading.grid(row=0,column=0,sticky='w')
-        self.status=ttk.Label(header,text='Ready',style='Ai.Muted.TLabel'); self.status.grid(row=0,column=1,sticky='e',padx=(12,0))
-        self.more_menu=tk.Menu(header,tearoff=False,background=c['panel'],foreground=c['text'],
-                               activebackground='#3c3c3c',activeforeground='#ffffff',font=self.fonts['small'])
-        for label,action in (('Copy conversation',self.copy_conversation),('Reset context',self.reset),
-                             ('Refresh models',self.load_models),('Help & limits',self.help)):
-            self.more_menu.add_command(label=label,command=action)
-        self.more_button=ttk.Menubutton(header,text='More',menu=self.more_menu,style='Ai.TMenubutton')
-        self.more_button.grid(row=0,column=2,sticky='e',padx=(12,0))
-        ttk.Label(header,text='A thoughtful assistant, right beside your editor.',style='Ai.Muted.TLabel').grid(row=1,column=0,sticky='w',pady=(5,0))
-        self.options=ttk.Frame(self.main,style='Ai.TFrame'); self.options.grid(row=1,column=0,sticky='ew',pady=(0,12))
-        model_row=ttk.Frame(self.options,style='Ai.TFrame'); model_row.pack(fill='x')
-        model_row.columnconfigure(1,weight=1)
-        self.lead_label=ttk.Label(model_row,text='Model',style='Ai.Muted.TLabel'); self.lead_label.grid(row=0,column=0,sticky='w',padx=(0,10))
-        self.lead=ttk.Combobox(model_row,state='readonly',style='Ai.TCombobox',width=20); self.lead.grid(row=0,column=1,sticky='ew')
-        self.command_picker=ttk.Combobox(model_row,textvariable=self.command,values=('Ask','Team'),state='readonly',width=7,style='Ai.TCombobox')
-        self.command_picker.grid(row=0,column=2,padx=(8,0)); self.command_picker.bind('<<ComboboxSelected>>',lambda event:self.fields())
-        self.compact_mode=ttk.Combobox(model_row,textvariable=self.mode,values=('Chat','Code'),state='readonly',width=7,style='Ai.TCombobox')
-        self.compact_mode.grid(row=0,column=3,padx=(8,0)); self.compact_mode.bind('<<ComboboxSelected>>',lambda event:self.fields())
-        self.compact_mode.grid_remove()
-        budget_row=ttk.Frame(self.options,style='Ai.TFrame'); budget_row.pack(fill='x',pady=(8,0))
-        ttk.Label(budget_row,text='Reply tokens',style='Ai.Muted.TLabel').pack(side='left',padx=(0,8))
-        self.reply_cap=tk.StringVar(self.window,'Auto')
-        self.reply_picker=ttk.Combobox(budget_row,textvariable=self.reply_cap,values=('Auto','512','1024','2048','4096','8192'),state='readonly',width=8,style='Ai.TCombobox')
-        self.reply_picker.pack(side='left')
-        ttk.Label(budget_row,text='Larger replies may use more credits',style='Ai.Muted.TLabel').pack(side='left',padx=8)
-        self.reply_cap.trace_add('write',lambda *args:self.attachment_status())
-        self.team=ttk.Frame(self.options,style='Ai.TFrame')
-        ttk.Label(self.team,text='Up to 2 workers · Ctrl-click to select · One model per developer',style='Ai.Muted.TLabel').pack(anchor='w',pady=(10,6))
-        self.workers=tk.Listbox(self.team,selectmode='extended',exportselection=False,height=3,font=self.fonts['small'],
-            background=c['panel'],foreground=c['text'],selectbackground='#264f78',selectforeground='#ffffff',
-            highlightthickness=1,highlightbackground=c['border'],borderwidth=0,activestyle='none')
-        self.workers.pack(fill='x')
-        conversation=ttk.Frame(self.main,style='Ai.TFrame'); conversation.grid(row=2,column=0,sticky='nsew')
-        self.output=ScrolledText(conversation,height=1,width=1,wrap='word',state='disabled',font=self.fonts['body'],
-            background=c['bg'],foreground=c['text'],insertbackground=c['accent'],selectbackground='#264f78',
-            selectforeground='#ffffff',inactiveselectbackground='#264f78',
-            borderwidth=0,highlightthickness=0,padx=12,pady=10,spacing1=2,spacing3=6)
-        self.output.pack(fill='both',expand=True); self.output.frame.configure(background=c['bg'])
-        self.output.vbar.configure(background='#424242',troughcolor=c['bg'],borderwidth=0,width=10)
-        self.output.tag_configure('user',background=c['user'],foreground='#dddddd',lmargin1=130,lmargin2=130,rmargin=12,spacing1=3,spacing3=4)
-        self.output.tag_configure('assistant',background=c['answer'],lmargin1=12,lmargin2=12,rmargin=42,spacing1=2,spacing3=4)
-        self.output.tag_configure('notice',foreground=c['muted'],font=self.fonts['small'],lmargin1=12,lmargin2=12,rmargin=12)
-        self.output.tag_configure('role',foreground=c['accent'],font=self.fonts['label'])
-        self.output.tag_configure('bold',font=self.fonts['bold'])
-        self.output.tag_configure('heading',font=self.fonts['brand'],foreground='#eeeeee')
-        self.output.tag_configure('code',font=self.fonts['mono'],background='#181818',foreground='#ce9178',lmargin1=26,lmargin2=26,rmargin=25,spacing1=2,spacing3=2)
-        self.output.tag_configure('inline',font=self.fonts['mono'],foreground='#9cdcfe',background='#2d2d2d')
-        self.output.tag_configure('markup',elide=True)
-        self.output.tag_raise('sel')
-        self.welcome=ttk.Frame(conversation,style='Ai.TFrame',padding=20)
-        self.welcome.place(relx=.5,rely=.44,anchor='center')
-        ttk.Label(self.welcome,text='What can we work on?',style='Ai.Title.TLabel').pack(pady=(0,9))
-        ttk.Label(self.welcome,text='Ask a question, attach context, or start with an idea.',style='Ai.Muted.TLabel').pack(pady=(0,22))
-        examples=ttk.Frame(self.welcome,style='Ai.TFrame'); examples.pack()
-        for title,prompt in (('Explain code','Explain the attached code clearly.'),('Find a bug','Review the attached code for bugs and suggest a focused fix.'),('Plan a change','Help me plan a small, maintainable change.')):
-            ttk.Button(examples,text=title,style='Ai.TButton',command=lambda prompt=prompt:self.use_example(prompt)).pack(side='left',padx=4)
-        self.composer=ttk.Frame(self.main,style='Ai.Panel.TFrame',padding=10)
-        self.composer.grid(row=3,column=0,sticky='ew',pady=(10,0)); self.composer.columnconfigure(0,weight=1)
-        self.chip_buttons=[]
-        self.chips=ttk.Frame(self.composer,style='Ai.Panel.TFrame')
-        self.chips.bind('<Configure>',lambda event:self.layout_chips())
-        self.chips.grid(row=0,column=0,columnspan=2,sticky='ew',pady=(0,5))
-        self.task_label=ttk.Label(self.composer,text='Message',style='Ai.Panel.TLabel'); self.task_label.grid(row=1,column=0,sticky='w',pady=(0,5))
-        self.prompt=ScrolledText(self.composer,height=2,width=1,wrap='word',font=self.fonts['body'],background=c['panel'],
-            foreground=c['text'],insertbackground=c['accent'],selectbackground='#264f78',borderwidth=0,highlightthickness=0,padx=3,pady=5)
-        self.prompt.grid(row=2,column=0,columnspan=2,sticky='ew')
-        self.prompt.frame.configure(background=c['panel']); self.prompt.vbar.configure(background=c['panel'],troughcolor=c['panel'],borderwidth=0,width=9)
-        self.placeholder=tk.Label(self.prompt,text='Ask anything about your work…',font=self.fonts['body'],background=c['panel'],foreground='#969696',cursor='xterm')
-        self.placeholder.place(x=3,y=5); self.placeholder.bind('<Button-1>',lambda event:self.prompt.focus_set())
-        self.prompt.bind('<FocusIn>',lambda event:self.placeholder.place_forget())
-        self.prompt.bind('<FocusOut>',lambda event:self.update_placeholder())
-        self.prompt.bind('<Return>',self.send_enter); self.prompt.bind('<KP_Enter>',self.send_enter)
-        controls=ttk.Frame(self.composer,style='Ai.Panel.TFrame'); controls.grid(row=3,column=0,sticky='w',pady=(8,0))
-        ttk.Button(controls,text='+ Files',command=self.attach_files,style='Ai.TButton').pack(side='left')
-        ttk.Button(controls,text='Current document',command=self.attach_document,style='Ai.TButton').pack(side='left',padx=5)
-        ttk.Button(controls,text='Clear files',command=self.clear_attachments,style='Ai.TButton').pack(side='left')
-        actions=ttk.Frame(self.composer,style='Ai.Panel.TFrame'); actions.grid(row=3,column=1,sticky='e',pady=(8,0))
-        self.stop_button=ttk.Button(actions,text='Stop',command=self.cancel,style='Ai.TButton',state='disabled'); self.stop_button.pack(side='left',padx=(6,6))
-        self.send=ttk.Button(actions,text='Send',command=self.submit,style='Ai.Send.TButton'); self.send.pack(side='left')
-        self.attached=ttk.Label(self.main,text='No files attached',style='Ai.Muted.TLabel'); self.attached.grid(row=4,column=0,sticky='w',pady=(8,0))
-        self.limits_label=ttk.Label(self.main,text='',wraplength=820,style='Ai.Muted.TLabel'); self.limits_label.grid(row=5,column=0,sticky='ew',pady=(5,0))
-        ttk.Label(self.main,text='Enter to send · Shift+Enter for a new line · AI can make mistakes.',style='Ai.Muted.TLabel').grid(row=6,column=0,sticky='w',pady=(7,0))
-        self.attachments=[]; self.current_role='notice'; self.code_block=False
-        self.prompt.bind('<<Modified>>',self.prompt_changed)
-        self.window.bind('<Configure>',self.resize)
-        self.fields(); self.load_models()
+def attachment_context(attachments):
+    return '\n\n'.join(f'--- File: {item["path"].parent.name}/{item["path"].name} ---\n{item["text"]}' for item in attachments)
 
-    def set_mode(self,mode):
-        if self.process is None:
-            self.mode.set(mode); self.fields()
 
-    def fields(self):
-        self.attachment_status()
-        team=self.command.get()=='Team'
-        self.window.minsize(660,660 if team else 580)
-        self.heading.configure(text='Code workspace' if self.mode.get()=='Code' else 'Chat workspace')
-        self.lead_label.configure(text='Team lead' if team else 'Model')
-        self.task_label.configure(text='Team task' if team else 'Message')
-        for name,button in self.mode_buttons:
-            button.configure(style='Ai.Send.TButton' if name==self.mode.get() else 'Ai.TButton')
-        if team: self.team.pack(fill='x',pady=(0,5))
-        else: self.team.pack_forget()
+class NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        return None  # Do not forward provider credentials to a redirected URL.
 
-    def resize(self,event):
-        if event.widget is not self.window: return
-        narrow=self.window.winfo_width()<920
-        if narrow:
-            self.sidebar.grid_remove(); self.compact_mode.grid()
+
+class AIResponseError(ValueError):
+    """Only locally authored, non-secret error descriptions belong here."""
+
+
+def request_json(config, key, url, payload=None):
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    if key:
+        if config.get('protocol') == 'Google Gemini':
+            headers['x-goog-api-key'] = key
         else:
-            self.sidebar.grid(); self.compact_mode.grid_remove()
-        self.resize_content()
+            headers['Authorization'] = 'Bearer ' + key
+    request = Request(url, data=json.dumps(payload).encode('utf-8') if payload is not None else None, headers=headers)
+    with build_opener(NoRedirects()).open(request, timeout=config['timeout']) as response:
+        raw = response.read(2097153)
+    if len(raw) > 2097152:
+        raise AIResponseError('Provider response exceeds the 2 MiB response limit.')
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise AIResponseError('Provider returned an unexpected JSON format.')
+    return data
 
-    def resize_content(self,event=None):
-        width=max(300,self.main.winfo_width()-32)
-        self.limits_label.configure(wraplength=width)
-        self.output.tag_configure('user',lmargin1=max(30,int(width*.17)),lmargin2=max(30,int(width*.17)))
 
-    def use_example(self,value):
-        if self.process is None:
-            self.prompt.delete('1.0','end'); self.prompt.insert('1.0',value); self.prompt.focus_set()
-
-    def update_placeholder(self):
-        if self.prompt.get('1.0','end-1c') or self.window.focus_get() is self.prompt:
-            self.placeholder.place_forget()
-        else: self.placeholder.place(x=3,y=5)
-
-    def send_enter(self,event):
-        if event.state & 1: return None
-        self.submit(); return 'break'
-
-    def set_running(self,running):
-        self.send.configure(state='disabled' if running else 'normal')
-        self.refresh.configure(state='disabled' if running else 'normal')
-        self.stop_button.configure(state='normal' if running else 'disabled')
-        self.reset_button.configure(state='disabled' if running else 'normal')
-        for _,button in self.mode_buttons: button.configure(state='disabled' if running else 'normal')
-        for widget in (self.lead,self.command_picker,self.compact_mode,self.reply_picker): widget.configure(state='disabled' if running else 'readonly')
-
-    def append(self,text,role=None):
-        new_role = role is not None and role != self.current_role
-        if role is not None:
-            self.current_role=role
-            if new_role: self.code_block=False
-        self.welcome.place_forget()
-        follow=self.output.yview()[1]>.97
-        self.output.configure(state='normal')
-        start=self.output.index('end-1c')
-        if self.current_role=='assistant' and (new_role or text.startswith(('Assistant:\n','Team output:\n'))):
-            self.output.mark_set('latest_reply',start)
-            self.output.mark_gravity('latest_reply','left')
-        self.output.insert('end',text,(self.current_role,))
-        if text.startswith(('You:\n','Assistant:\n','Team output:\n')):
-            self.output.tag_add('role',start,f'{start} lineend')
-        if self.current_role=='assistant':
-            self.format_reply(start,text)
-        if len(self.output.get('1.0','end-1c'))>200000:
-            cutoff=self.output.index('end-200000c')
-            if 'latest_reply' in self.output.mark_names() and self.output.compare(cutoff,'>','latest_reply'):
-                cutoff=self.output.index('latest_reply')
-            self.output.delete('1.0',cutoff)
-        if follow: self.output.see('end')
-        self.output.configure(state='disabled')
-
-    def format_reply(self,start,value):
-        import re
-        offset=0
-        for line in value.splitlines(keepends=True):
-            begin=f'{start} +{offset}c'; finish=f'{start} +{offset+len(line)}c'
-            stripped=line.lstrip()
-            if stripped.startswith('```'):
-                self.code_block=not self.code_block
-                self.output.tag_add('code',begin,finish)
-                marker=len(line)-len(stripped)
-                self.output.tag_add('markup',f'{begin} +{marker}c',f'{begin} +{marker+3}c')
-            elif self.code_block:
-                self.output.tag_add('code',begin,finish)
-            else:
-                if re.match(r'^#{1,3}\s',line): self.output.tag_add('heading',begin,finish)
-                for pattern,tag,padding in ((r'\*\*([^\n]+?)\*\*','bold',2),(r'`([^`\n]+)`','inline',1)):
-                    for match in re.finditer(pattern,line):
-                        self.output.tag_add(tag,f'{begin} +{match.start()}c',f'{begin} +{match.end()}c')
-                        self.output.tag_add('markup',f'{begin} +{match.start()}c',f'{begin} +{match.start()+padding}c')
-                        self.output.tag_add('markup',f'{begin} +{match.end()-padding}c',f'{begin} +{match.end()}c')
-            offset+=len(line)
-
-    def load_models(self):
-        if self.process is not None:
-            return
-        script = SCRIPTS / ("code_ai.py" if self.mode.get() == "Code" else "chat_ai.py")
-        self.start({"script": str(script), "command": "list", "timeout_seconds": 45})
-
-    def start(self, request, history_key=None):
-        if self.process is not None:
-            return False
-        if not Path(request["script"]).is_file():
-            messagebox.showerror("AI scripts missing", str(request["script"]), parent=self.window)
-            return False
-        events = queue.Queue(maxsize=128)
-        stop = threading.Event()
+def send_request(config, key, messages):
+    if config.get('protocol') == 'Google Gemini':
+        contents = [{'role': 'model' if item['role'] == 'assistant' else 'user',
+                     'parts': [{'text': item['content']}]} for item in messages[1:]]
+        payload = {'systemInstruction': {'parts': [{'text': messages[0]['content']}]},
+                   'contents': contents, 'generationConfig': {'maxOutputTokens': config['reply_tokens']}}
+        endpoint = config['endpoint'].rstrip('/') + '/models/' + quote(config['model'], safe='') + ':generateContent'
+        data = request_json(config, key, endpoint, payload)
+        candidates = data.get('candidates')
+        if not isinstance(candidates, list) or not candidates or not isinstance(candidates[0], dict):
+            raise AIResponseError('Gemini returned no text candidate. Check model access, safety restrictions, and output limit; no retry was sent.')
+        candidate = candidates[0]
+        parts = candidate.get('content', {}).get('parts', [])
+        reply = '\n'.join(part['text'] for part in parts if isinstance(part, dict)
+                          and isinstance(part.get('text'), str) and not part.get('thought'))
+        if not reply.strip():
+            raise AIResponseError('Gemini returned no visible text. Check safety restrictions or raise the reply-token cap for reasoning models. No retry was sent.')
+        usage_data = data.get('usageMetadata') or {}
+        usage = {'incomplete': candidate.get('finishReason') not in (None, 'STOP')}
+        if isinstance(usage_data, dict) and 'totalTokenCount' in usage_data:
+            usage['total_tokens'] = usage_data['totalTokenCount']
+        return reply, usage
+    responses = config.get('protocol') == 'OpenAI Responses'
+    if responses:
+        payload = {'model': config['model'], 'instructions': messages[0]['content'],
+                   'input': messages[1:], 'max_output_tokens': config['reply_tokens'],
+                   'stream': False, 'store': False}
+        if config.get('reasoning', 'default') != 'default':
+            payload['reasoning'] = {'effort': config['reasoning']}
+    else:
+        payload = {'model': config['model'], 'messages': messages,
+                   'max_tokens': config['reply_tokens'], 'stream': False}
+    data = request_json(config, key, config['endpoint'], payload)
+    usage = dict(data['usage']) if isinstance(data.get('usage'), dict) else {}
+    if responses:
+        if data.get('error') or data.get('status') in ('failed', 'cancelled'):
+            raise AIResponseError('OpenAI could not complete the response. Check model access and provider limits.')
+        parts = []
+        for item in data.get('output', []):
+            if isinstance(item, dict) and item.get('type') == 'message':
+                for part in item.get('content', []):
+                    if isinstance(part, dict):
+                        value = part.get('text') if part.get('type') == 'output_text' else part.get('refusal') if part.get('type') == 'refusal' else None
+                        if isinstance(value, str):
+                            parts.append(value)
+        reply = '\n'.join(parts)
+        usage['incomplete'] = data.get('status') == 'incomplete'
+    else:
         try:
-            process = subprocess.Popen([sys.executable, "-B", "-u", "-c", BRIDGE],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8")
-            process.stdin.write(json.dumps(request))
-            process.stdin.close()
-        except (OSError, BrokenPipeError) as error:
-            messagebox.showerror("AI request", str(error), parent=self.window)
-            return False
-        self.process = process
-        self.stop = stop
-        self.set_running(True)
-        self.status.configure(text="Loading models…" if request["command"] == "list" else "Running…")
-        def reader():
-            try:
-                for line in process.stdout:
-                    while not stop.is_set():
-                        try:
-                            events.put(line[:100000], timeout=.1)
-                            break
-                        except queue.Full:
-                            continue
-                    if stop.is_set():
-                        break
-            finally:
-                process.stdout.close()
-                process.wait()
-        reader_thread = threading.Thread(target=reader, daemon=True)
-        reader_thread.start()
-        deadline = time.monotonic() + request.get("timeout_seconds", 45)
-        result_status = None
-        def poll():
-            nonlocal result_status
-            self.timer = None
-            if self.process is not process:
-                return
-            for _ in range(50):
-                try:
-                    line = events.get_nowait()
-                except queue.Empty:
-                    break
-                if line.startswith("EVENT:"):
-                    event = json.loads(line[6:])
-                    kind = event.get("type")
-                    if kind == "text":
-                        role = event.get("role", "assistant")
-                        self.append(event.get("text", ""), role=role if role != self.current_role else None)
-                    elif kind in ("notice", "partial"):
-                        self.append(event.get("text", ""), role="notice")
-                        if kind == "partial": result_status = "Finished with worker errors"
-                    elif kind in ("error", "warning"):
-                        self.append("\n" + event.get("message", "AI request failed.") + "\n", role="notice")
-                        if event.get("status") == 429 and event.get("provider"):
-                            self.cooldowns[event["provider"]] = time.monotonic() + max(1, event.get("retry_after", 30))
-                        if kind == "error":
-                            result_status = "Rate limited" if event.get("status") == 429 else "Request failed"
-                elif line.startswith("MODELS:"):
-                    self.models = json.loads(line[7:])
-                    labels = [item["label"] for item in self.models]
-                    self.lead.configure(values=labels)
-                    self.lead.set(labels[0] if labels else "")
-                    self.workers.delete(0, "end")
-                    for label in labels:
-                        self.workers.insert("end", label)
-                    self.status.configure(text=f"{len(labels)} models available")
-                elif line.startswith("HISTORY:") and history_key is not None:
-                    self.histories.setdefault(history_key, []).extend(json.loads(line[8:]))
-                    self.histories[history_key] = self.histories[history_key][-12:]
-                else:
-                    self.append(line,role="notice" if request["command"]=="list" else None)
-            if process.poll() is None and time.monotonic() >= deadline:
-                self.cancel()
-                self.append("\n[Request timed out. Displayed output was kept.]\n", role="notice")
-                self.status.configure(text="Timed out")
-                return
-            if process.poll() is not None and not reader_thread.is_alive() and events.empty():
-                self.process = None
-                self.set_running(False)
-                self.status.configure(text=result_status or ("Finished" if process.returncode == 0 else "Request failed — see output"))
-            else:
-                self.timer = self.root.after(80, poll)
-        self.timer = self.root.after(80, poll)
-        return True
+            reply = data['choices'][0]['message']['content']
+            usage['incomplete'] = data['choices'][0].get('finish_reason') == 'length'
+        except (KeyError, IndexError, TypeError):
+            raise AIResponseError('Provider did not return a chat-completions text reply.') from None
+    if not isinstance(reply, str) or not reply.strip():
+        raise AIResponseError('No visible text returned. The output cap may have been consumed by reasoning; increase it explicitly or choose another model. No retry was sent.')
+    return reply, usage
 
-    def submit(self):
-        if self.process is not None:
-            return
+
+def list_models(config, key):
+    if config.get('protocol') == 'Google Gemini':
+        data = request_json(config, key, config['endpoint'].rstrip('/') + '/models')
+        if not isinstance(data.get('models'), list):
+            raise AIResponseError('Gemini did not return a model list. Check the key and API base URL, or enter a model ID manually.')
+        return sorted({item['name'].removeprefix('models/') for item in data['models']
+                       if isinstance(item, dict) and isinstance(item.get('name'), str)
+                       and 'generateContent' in item.get('supportedGenerationMethods', [])})
+    endpoint = config['endpoint'].rstrip('/')
+    suffix = '/responses' if config.get('protocol') == 'OpenAI Responses' else '/chat/completions'
+    if not endpoint.endswith(suffix):
+        raise AIResponseError('Cannot derive a models URL from this endpoint. Enter the model ID manually.')
+    data = request_json(config, key, endpoint[:-len(suffix)] + '/models')
+    if not isinstance(data.get('data'), list):
+        raise AIResponseError('Provider did not return a models list. Enter the model ID manually.')
+    return sorted({item['id'] for item in data['data'] if isinstance(item, dict) and isinstance(item.get('id'), str)})
+
+
+class AIAssistant:
+    def __init__(self, api):
+        self.api, self.editor = api, api._editor
+        self.root, self.window = self.editor.root, None
+        self.config = DEFAULTS.copy()
         try:
-            index = self.lead.current()
-            key = (self.mode.get(), self.models[index]["provider"], self.models[index]["name"]) if index >= 0 else None
-            request = build_request(self.mode.get(), self.command.get(), self.models, index,
-                self.workers.curselection(), self.prompt.get("1.0", "end-1c"),
-                list(self.attachments), self.histories.get(key, []),
-                reply_tokens=None if self.reply_cap.get()=='Auto' else int(self.reply_cap.get()))
-        except (ValueError, IndexError) as error:
-            messagebox.showerror("AI request", str(error), parent=self.window)
+            settings_source = SETTINGS_PATH if SETTINGS_PATH.exists() else SETTINGS_PATH.with_name('my_ai_example_settings.json')
+            saved = json.loads(settings_source.read_text(encoding='utf-8'))
+            self.config.update(validate_config(saved))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+        self.histories = {}
+        self.provider_keys = {}
+        self.profiles = {}
+        self.pending_prompt = None
+        self.used, self.busy, self.pause_until = 0, False, 0
+        self.last_reply = ''
+        self.attachments = []
+        self.attachment_buttons = []
+        self.results = queue.Queue(maxsize=1)
+        self.stopped = threading.Event()
+        self.poll_job = self.root.after(100, self.poll)
+        api.on_cleanup(self.cleanup)
+        api.add_command('AI Assistant…', self.show)
+        api.provide_service('get_status', self.get_status)
+
+    def get_status(self):
+        return {'busy': self.busy, 'requests_used': self.used, 'request_limit': self.config['session_requests'],
+                'cooldown_seconds': max(0, int(self.pause_until - time.monotonic()))}
+
+    def show(self):
+        if self.window is not None and self.window.winfo_exists():
+            self.window.deiconify(); self.window.lift()
             return
-        for provider, model in [request["lead"], *request["workers"]]:
-            remaining = self.cooldowns.get(provider, 0) - time.monotonic()
-            if remaining > 0:
-                messagebox.showinfo("Provider rate limit", f"{provider} is paused for about {int(remaining)+1} more seconds after a rate-limit response. Choose another provider or wait. The provider quota may last longer.", parent=self.window)
-                return
-        if request["history_omitted"]:
-            self.append(f"\n[Fast context: {request['history_omitted']} older history messages omitted from this request.]\n", role="notice")
-        self.append("\n" + self.mode.get() + " / " + self.command.get() + "\n", role="notice")
-        self.append("You:\n" + request["prompt"] + "\n\n", role="user")
-        self.append("Team output:\n" if request["command"] == "team" else "Assistant:\n", role="assistant")
-        if self.start(request, key if request["command"] == "ask" else None):
-            self.prompt.delete("1.0", "end")
+        window = self.window = tk.Toplevel(self.root)
+        window.title('AI Assistant — Chat / Code')
+        window.geometry('980x780'); window.minsize(640, 540)
+        window.protocol('WM_DELETE_WINDOW', self.hide)
+        self.fonts = {name: self.editor.ui_font.copy() for name in ('body', 'title', 'label', 'mono')}
+        self.fonts['body'].configure(size=11)
+        self.fonts['title'].configure(size=16, weight='bold')
+        self.fonts['label'].configure(size=10, weight='bold')
+        self.fonts['mono'] = self.editor.editor_font.copy()
+        style = ttk.Style(window)
+        for name, color in (('MyAI.TFrame', '#1e1e1e'), ('MyAI.Composer.TFrame', '#2d2d2d')):
+            style.configure(name, background=color)
+        style.configure('MyAI.TLabel', background='#1e1e1e', foreground='#cccccc', font=self.fonts['body'])
+        style.configure('MyAI.Title.TLabel', background='#1e1e1e', foreground='#eeeeee', font=self.fonts['title'])
+        style.configure('MyAI.Muted.TLabel', background='#1e1e1e', foreground='#969696', font=self.editor.ui_font)
+        style.configure('MyAI.TCheckbutton', background='#2d2d2d', foreground='#cccccc')
+        style.map('MyAI.TCheckbutton', background=[('active', '#2d2d2d')])
+        window.configure(background='#1e1e1e')
+        body = ttk.Frame(window, padding=(22, 16), style='MyAI.TFrame')
+        body.pack(fill='both', expand=True)
+        header = ttk.Frame(body, style='MyAI.TFrame'); header.pack(fill='x')
+        ttk.Label(header, text='AI Assistant', style='MyAI.Title.TLabel').pack(side='left')
+        self.mode = tk.StringVar(window, 'Chat')
+        ttk.Combobox(header, textvariable=self.mode, values=('Chat', 'Code'), state='readonly', width=7).pack(side='left', padx=12)
+        ttk.Button(header, text='How to use', command=self.show_help).pack(side='right', padx=8)
+        ttk.Button(header, text='Settings', command=self.show_settings).pack(side='right')
+        ttk.Button(header, text='Reset context', command=self.reset).pack(side='right', padx=8)
+        self.model_summary = ttk.Label(body, text='', style='MyAI.Muted.TLabel')
+        self.model_summary.pack(anchor='w', pady=(6, 12))
+        ttk.Separator(body).pack(fill='x')
 
-    def add_attachment(self, name, content):
-        candidate = "File: " + name + "\n" + content
-        limits = FAST_LIMITS[self.mode.get()]
-        maximum = limits["team_input_bytes"] if self.command.get() == "Team" else limits["input_bytes"]
-        if len(self.attachments) >= limits["attachments"]:
-            messagebox.showerror("Attachment limit", f"{self.mode.get()} fast mode allows {limits['attachments']} attachments.", parent=self.window)
-            return False
-        if input_size(self.prompt.get("1.0", "end-1c"), [*self.attachments, candidate]) > maximum:
-            messagebox.showerror("Input limit", f"Task and attachments must fit within {maximum:,} UTF-8 bytes. Choose a smaller relevant excerpt.", parent=self.window)
-            return False
-        self.attachments.append(candidate)
-        self.attachment_status()
-        return True
+        # Provider credentials and limits live in a separate, non-modal settings window.
+        self.settings_window = settings = tk.Toplevel(window)
+        settings.title('AI Assistant · Provider settings'); settings.geometry('760x610'); settings.minsize(640, 560)
+        settings.transient(window); settings.protocol('WM_DELETE_WINDOW', settings.withdraw)
+        settings.withdraw()
+        settings_body = ttk.Frame(settings, padding=18); settings_body.pack(fill='both', expand=True)
+        ttk.Label(settings_body, text='Provider & limits', style='Title.TLabel').pack(anchor='w', pady=(0, 12))
+        fields = ttk.Frame(settings_body); fields.pack(fill='x'); fields.columnconfigure(1, weight=1)
+        self.values = {name: tk.StringVar(window, str(value)) for name, value in self.config.items()}
+        initial_provider = provider_for(self.config)
+        self.key = tk.StringVar(window, os.environ.get(KEY_VARIABLES[initial_provider], ''))
+        self.key_host = urlsplit(self.config['endpoint']).hostname
+        self.active_provider = initial_provider
+        provider_row = ttk.Frame(settings_body)
+        provider_row.pack(fill='x', before=fields, pady=(0, 10))
+        ttk.Label(provider_row, text='Provider').pack(side='left', padx=(0, 8))
+        self.provider = tk.StringVar(window, initial_provider)
+        preset = ttk.Combobox(provider_row, textvariable=self.provider, values=(*PRESETS, 'Custom'), state='readonly', width=14)
+        preset.pack(side='left'); preset.bind('<<ComboboxSelected>>', lambda event: self.apply_preset())
+        ttk.Label(provider_row, text='API format').pack(side='left', padx=8)
+        ttk.Combobox(provider_row, textvariable=self.values['protocol'], values=PROTOCOLS, state='readonly', width=20).pack(side='left')
+        for row, (label, variable, secret) in enumerate((('API endpoint', self.values['endpoint'], False),
+                ('Model ID', self.values['model'], False), ('API key', self.key, True))):
+            ttk.Label(fields, text=label).grid(row=row, column=0, sticky='w', padx=(0, 12), pady=5)
+            if row == 1:
+                self.model_picker = ttk.Combobox(fields, textvariable=variable)
+                self.model_picker.grid(row=row, column=1, sticky='ew', pady=5)
+            else:
+                ttk.Entry(fields, textvariable=variable, show='•' if secret else '').grid(row=row, column=1, sticky='ew', pady=5)
+        model_controls = ttk.Frame(settings_body); model_controls.pack(fill='x', pady=10)
+        self.models_button = ttk.Button(model_controls, text='Refresh models', command=self.refresh_models)
+        self.models_button.pack(side='left')
+        ttk.Label(model_controls, text='Reasoning (Responses)').pack(side='left', padx=8)
+        ttk.Combobox(model_controls, textvariable=self.values['reasoning'], values=('default', 'low', 'medium', 'high'), state='readonly', width=9).pack(side='left')
+        limits = ttk.Frame(settings_body); limits.pack(fill='x', pady=10)
+        for column, (label, name) in enumerate((('Reply tokens', 'reply_tokens'), ('Input bytes', 'input_bytes'),
+                                                ('Timeout (s)', 'timeout'), ('Requests/session', 'session_requests'))):
+            limits.columnconfigure(column, weight=1)
+            ttk.Label(limits, text=label).grid(row=0, column=column, sticky='w', padx=(0, 10))
+            ttk.Entry(limits, textvariable=self.values[name], width=11).grid(row=1, column=column, sticky='ew', padx=(0, 10), pady=4)
+        self.provider_tip = ttk.Label(settings_body, text=PROVIDER_HELP[initial_provider], wraplength=680, style='Muted.TLabel')
+        self.provider_tip.pack(fill='x', pady=6)
+        self.values['endpoint'].trace_add('write', self.endpoint_changed)
+        ttk.Label(settings_body, text='API keys stay in memory. Request limits are separate from provider billing.',
+                  style='Muted.TLabel', wraplength=640).pack(anchor='w', pady=8)
+        actions = ttk.Frame(settings_body); actions.pack(fill='x', pady=8)
+        ttk.Button(actions, text='Save settings', command=self.save_settings, style='Accent.TButton').pack(side='right')
+        ttk.Button(actions, text='Done', command=settings.withdraw).pack(side='right', padx=8)
+        self.settings_status = ttk.Label(settings_body, text='', style='Muted.TLabel', wraplength=640)
+        self.settings_status.pack(anchor='w')
 
-    def attach_document(self):
-        path = self.api.get_path()
-        self.add_attachment(path.name if path else "untitled.txt", self.api.get_text())
+        conversation = ttk.Frame(body, style='MyAI.TFrame')
+        conversation.pack(fill='both', expand=True, pady=(12, 16))
+        self.output = ScrolledText(conversation, height=6, width=1, state='disabled', wrap='word',
+            background='#1e1e1e', foreground='#cccccc', selectbackground='#264f78',
+            borderwidth=0, highlightthickness=0, padx=16, pady=14, font=self.fonts['body'], spacing3=8)
+        self.output.pack(fill='both', expand=True)
+        self.output.frame.configure(background='#1e1e1e')
+        self.output.vbar.configure(background='#424242', troughcolor='#1e1e1e', borderwidth=0, width=9)
+        self.output.tag_configure('user', background='#2a2d2e', lmargin1=100, lmargin2=100, rmargin=14, spacing1=14, spacing3=12)
+        self.output.tag_configure('assistant', lmargin1=16, lmargin2=16, rmargin=28, spacing1=14, spacing3=12)
+        self.output.tag_configure('notice', foreground='#969696', lmargin1=16, lmargin2=16)
+        self.output.tag_configure('role', font=self.fonts['label'], foreground='#3794ff')
+        self.output.tag_configure('code', font=self.fonts['mono'], background='#181818', foreground='#d4d4d4')
+        self.output.tag_raise('sel')
+        self.welcome = ttk.Frame(conversation, style='MyAI.TFrame', padding=16)
+        self.welcome.place(relx=.5, rely=.45, anchor='center')
+        ttk.Label(self.welcome, text='What would you like to build?', style='MyAI.Title.TLabel').pack(pady=(0, 8))
+        ttk.Label(self.welcome, text='A conversation, a code review, or your next plugin.', style='MyAI.Muted.TLabel').pack(pady=(0, 18))
+        examples = ttk.Frame(self.welcome, style='MyAI.TFrame'); examples.pack()
+        for label, prompt in (('Explain code', 'Explain the code I attach.'),
+                              ('Build a plugin', 'Help me build a Pocket Editor plugin.'),
+                              ('Review a change', 'Review my attached code for bugs.')):
+            ttk.Button(examples, text=label, command=lambda prompt=prompt: self.use_example(prompt)).pack(side='left', padx=4)
+        self.composer = tk.Frame(body, background='#2d2d2d', highlightbackground='#3c3c3c', highlightcolor='#007acc', highlightthickness=1)
+        self.composer.pack(fill='x')
+        self.attachment_strip = ttk.Frame(self.composer, padding=(10, 6, 10, 0), style='MyAI.Composer.TFrame')
+        self.attachment_strip.pack(fill='x')
+        self.attachment_strip.bind('<Configure>', lambda event: self.layout_attachments())
+        ttk.Label(self.composer, text='Message', background='#2d2d2d', foreground='#969696').pack(anchor='w', padx=14, pady=(10, 0))
+        self.prompt = tk.Text(self.composer, height=4, width=1, wrap='word', background='#2d2d2d', foreground='#dddddd',
+            insertbackground='#3794ff', selectbackground='#264f78', borderwidth=0, highlightthickness=0,
+            padx=14, pady=8, font=self.fonts['body'], undo=True)
+        self.prompt.pack(fill='x')
+        self.prompt.bind('<Return>', self.send_enter)
+        self.prompt.bind('<Control-Return>', lambda event: self.submit() or 'break')
+        self.prompt.bind('<FocusIn>', lambda event: self.composer.configure(highlightbackground='#007acc'))
+        self.prompt.bind('<FocusOut>', lambda event: self.composer.configure(highlightbackground='#3c3c3c'))
+        composer_controls = ttk.Frame(self.composer, padding=(10, 0, 10, 10), style='MyAI.Composer.TFrame')
+        composer_controls.pack(fill='x')
+        self.attach = tk.BooleanVar(window, False)
+        ttk.Button(composer_controls, text='+ Files', command=self.attach_files).pack(side='left', padx=(0, 8))
+        ttk.Checkbutton(composer_controls, text='Attach current tab', variable=self.attach, style='MyAI.TCheckbutton').pack(side='left')
+        self.send = ttk.Button(composer_controls, text='Send ↑', style='Accent.TButton', command=self.submit, state='disabled' if self.busy else 'normal')
+        self.send.pack(side='right')
+        self.status = ttk.Label(body, text='Ready · configure your provider in Settings', style='MyAI.Muted.TLabel', wraplength=600)
+        self.status.pack(fill='x', pady=(8, 6))
+        footer = ttk.Frame(body, style='MyAI.TFrame'); footer.pack(fill='x')
+        ttk.Label(footer, text='Enter to send · Shift+Enter for a new line', style='MyAI.Muted.TLabel').pack(side='left')
+        ttk.Button(footer, text='Open reply', command=self.open_reply).pack(side='right')
+        ttk.Button(footer, text='Copy conversation', command=self.copy_conversation).pack(side='right', padx=8)
+        for variable in (self.values['model'], self.provider, self.mode):
+            variable.trace_add('write', self.update_summary)
+        window.bind('<Configure>', self.resize_chat)
+        self.update_summary()
+        self.update_attachments()
 
     def attach_files(self):
-        maximum = FAST_LIMITS[self.mode.get()]["input_bytes"]
-        for filename in filedialog.askopenfilenames(parent=self.window):
-            try:
-                path = Path(filename)
-                with path.open("rb") as stream:
-                    data = stream.read(maximum + 1)
-                if len(data) > maximum:
-                    raise ValueError(f"{path.name} exceeds {maximum:,} bytes. Attach a smaller relevant excerpt.")
-                self.add_attachment(path.name, data.decode("utf-8"))
-            except (OSError, UnicodeError, ValueError) as error:
-                messagebox.showerror("Attachment", str(error), parent=self.window)
+        names = filedialog.askopenfilenames(parent=self.window, title='Attach text or code files',
+            filetypes=[('Text and code', '*.txt *.md *.py *.json *.js *.ts *.html *.css *.cpp *.h *.php *.csv *.yaml *.yml'), ('All files', '*')])
+        if not names:
+            return
+        try:
+            limit = int(self.values['input_bytes'].get())
+            if not 1024 <= limit <= 1048576:
+                raise ValueError('Set an input-byte limit between 1,024 and 1,048,576 in Settings.')
+            additions = []
+            known = {item['path'] for item in self.attachments}
+            for name in names:
+                path = Path(name).resolve()
+                if path not in known:
+                    if len(self.attachments) + len(additions) >= MAX_ATTACHMENTS:
+                        raise ValueError(f'Attach at most {MAX_ATTACHMENTS} files. Remove a chip to choose another.')
+                    additions.append(read_attachment(path, limit))
+                    known.add(path)
+            combined = [*self.attachments, *additions]
+            if len(attachment_context(combined).encode('utf-8')) > limit:
+                raise ValueError('Selected files and their headers exceed the input-byte limit. Use smaller files or raise it in Settings.')
+        except (OSError, ValueError) as error:
+            messagebox.showerror('Attach files', str(error), parent=self.window)
+            return
+        self.attachments = combined
+        self.update_attachments()
+        self.status.configure(text=f'{len(self.attachments)}/{MAX_ATTACHMENTS} files attached · snapshots included with each message until removed')
 
-    def clear_attachments(self):
-        self.attachments.clear()
-        self.attachment_status()
+    def remove_attachment(self, item):
+        if item in self.attachments:
+            self.attachments.remove(item)
+            self.update_attachments()
+            self.status.configure(text='Attachment removed · Reset context to clear files sent in earlier messages')
 
-    def prompt_changed(self, event=None):
-        if self.prompt.edit_modified():
-            self.prompt.edit_modified(False)
-            self.attachment_status()
-            self.update_placeholder()
-            lines=self.prompt.get("1.0","end-1c").count("\n")+1
-            self.prompt.configure(height=max(2,min(5,lines)))
+    def update_attachments(self):
+        for button in self.attachment_buttons:
+            button.destroy()
+        self.attachment_buttons = []
+        for item in self.attachments:
+            name = item['path'].name
+            label = name if len(name) <= 24 else name[:21] + '…'
+            button = ttk.Button(self.attachment_strip, text=label + '  ×', command=lambda item=item: self.remove_attachment(item))
+            self.attachment_buttons.append(button)
+        self.layout_attachments()
 
-    def attachment_status(self):
-        limits = dict(FAST_LIMITS[self.mode.get()])
-        if hasattr(self,'reply_cap') and self.reply_cap.get()!='Auto':
-            try: limits['reply_tokens']=int(self.reply_cap.get())
-            except ValueError: pass
-            limits['empty_retry_tokens']=max(limits['reply_tokens'],limits['empty_retry_tokens'])
-        team = self.command.get() == "Team"
-        maximum = limits["team_input_bytes"] if team else limits["input_bytes"]
-        timeout = limits["team_timeout_seconds"] if team else limits["timeout_seconds"]
-        used = input_size(self.prompt.get("1.0", "end-1c"), self.attachments)
-        self.limits_label.configure(text=f"Fast {self.mode.get()} · Input {used:,}/{maximum:,} bytes · Reply ≤{limits['reply_tokens']:,} tokens · "
-            + (f"Up to {limits['workers']} workers" if team else f"Last {limits['history_turns']} turns / {limits['history_bytes']//1024} KiB history")
-            + f" · {timeout}s timeout · Empty reply: 1 retry ≤{limits['empty_retry_tokens']:,} tokens")
-        size = sum(len(text.encode("utf-8")) for text in self.attachments)
-        self.attached.configure(text=f"{len(self.attachments)}/{limits['attachments']} files · {size:,} bytes · Included with each message until removed")
-        for child in self.chips.winfo_children(): child.destroy()
-        self.chip_buttons=[]
-        for index,attachment in enumerate(self.attachments):
-            name=attachment.split("\n",1)[0].removeprefix("File: ")
-            label=name if len(name)<=25 else name[:22]+"…"
-            button=ttk.Button(self.chips,text=label+"  ×",style='Ai.Chip.TButton',
-                              command=lambda index=index:self.remove_attachment(index))
-            self.chip_buttons.append(button)
-        self.layout_chips()
-        if self.attachments: self.chips.grid()
-        else: self.chips.grid_remove()
+    def layout_attachments(self):
+        available = max(250, self.attachment_strip.winfo_width() - 20)
+        used = row = column = 0
+        for button in self.attachment_buttons:
+            width = button.winfo_reqwidth() + 6
+            if used and used + width > available:
+                row += 1
+                column = used = 0
+            button.grid(row=row, column=column, sticky='w', padx=(0, 6), pady=(0, 4))
+            used += width
+            column += 1
 
-    def layout_chips(self):
-        available=max(200,self.chips.winfo_width())
-        x=y=0
-        height=max((button.winfo_reqheight() for button in self.chip_buttons),default=1)
-        for button in self.chip_buttons:
-            width=min(available,button.winfo_reqwidth())
-            if x and x+width>available:
-                x=0; y+=height+6
-            button.place(x=x,y=y,width=width,height=height)
-            x+=width+6
-        self.chips.configure(height=y+height)
+    def hide(self):
+        self.settings_window.withdraw()
+        self.window.withdraw()
 
-    def remove_attachment(self,index):
-        if 0<=index<len(self.attachments):
-            self.attachments.pop(index); self.attachment_status()
+    def show_settings(self):
+        self.settings_window.deiconify()
+        self.settings_window.lift()
+
+    def update_summary(self, *args):
+        model = self.values['model'].get().strip() or 'Choose a model in Settings'
+        self.model_summary.configure(text=f'{self.provider.get()}  /  {model}  ·  {self.mode.get()}')
+
+    def resize_chat(self, event):
+        if event.widget is self.window:
+            width = max(300, self.window.winfo_width() - 80)
+            self.status.configure(wraplength=width)
+            self.output.tag_configure('user', lmargin1=max(30, min(160, width // 6)), lmargin2=max(30, min(160, width // 6)))
+
+    def use_example(self, prompt):
+        if not self.busy:
+            self.prompt.delete('1.0', 'end'); self.prompt.insert('1.0', prompt); self.prompt.focus_set()
+
+    def send_enter(self, event):
+        if event.state & 1:
+            return None
+        self.submit()
+        return 'break'
 
     def copy_conversation(self):
-        """Copy the retained visible transcript, not hidden history/attachments."""
-        transcript = self.output.get("1.0", "end-1c")
-        if not transcript.strip():
-            messagebox.showinfo("Copy conversation", "There is no conversation to copy yet.",
-                                parent=self.window)
-            return False
+        text = self.output.get('1.0', 'end-1c')
+        if text:
+            try:
+                self.root.clipboard_clear(); self.root.clipboard_append(text)
+                self.status.configure(text='Conversation copied')
+            except tk.TclError:
+                self.status.configure(text='Could not access the clipboard')
+
+    def endpoint_changed(self, *_):
         try:
-            # Own the clipboard on the editor root so closing this window keeps it.
-            self.root.clipboard_clear()
-            self.root.clipboard_append(transcript)
-        except tk.TclError as error:
-            messagebox.showerror("Copy conversation", str(error), parent=self.window)
-            return False
-        if self.process is None:
-            self.status.configure(text="Conversation copied")
-        return True
+            host = urlsplit(self.values['endpoint'].get().strip()).hostname
+        except ValueError:
+            host = None
+        if host != self.key_host:
+            self.key.set('')
+            self.key_host = host
+
+    def apply_preset(self):
+        previous = self.active_provider
+        self.provider_keys[previous] = self.key.get()
+        self.profiles[previous] = {name: value.get() for name, value in self.values.items()}
+        selected = self.provider.get()
+        self.active_provider = selected
+        preset = PRESETS.get(selected)
+        if preset:
+            protocol, endpoint = preset
+            profile = self.profiles.get(selected, dict(self.config, protocol=protocol, endpoint=endpoint, model='', reasoning='default'))
+            for name, value in profile.items():
+                self.values[name].set(str(value))
+        else:
+            self.key.set('')
+        self.key.set(self.provider_keys.get(selected, os.environ.get(KEY_VARIABLES[selected], '')))
+        self.key_host = urlsplit(self.values['endpoint'].get()).hostname
+        self.model_picker.configure(values=())
+        self.histories.clear()
+        self.provider_tip.configure(text=PROVIDER_HELP[selected])
+        self.status.configure(text='Choose a provider, enter its own API key, then Refresh models. See How to use for Gemini and local Ollama examples.')
+        self.update_summary()
+
+    def checked_key(self, config):
+        self.endpoint_changed()
+        key = self.key.get().strip()
+        if any(ord(char) < 32 or ord(char) == 127 for char in key):
+            raise ValueError('API key must be a single line without control characters.')
+        host = urlsplit(config['endpoint']).hostname
+        known_remote = {'api.openai.com', 'generativelanguage.googleapis.com', 'openrouter.ai', 'api.groq.com', 'api.deepseek.com'}
+        if host in known_remote and not key:
+            raise ValueError('Enter this provider’s own API key or set ' + KEY_VARIABLES.get(provider_for(config), 'CUSTOM_AI_API_KEY') + '. Website/chat login credentials are not API keys.')
+        return key
+
+    def show_help(self):
+        help_window = tk.Toplevel(self.window)
+        help_window.title('AI Assistant — setup and Gemini example')
+        help_window.geometry('760x650')
+        text = ScrolledText(help_window, wrap='word', padx=16, pady=16)
+        text.pack(fill='both', expand=True)
+        guide = Path(__file__).resolve().parents[1] / 'docs/AI_ASSISTANT.md'
+        try:
+            content = guide.read_text(encoding='utf-8')
+        except OSError:
+            content = PROVIDER_HELP['Google Gemini'] + '\n\n' + '\n\n'.join(name + ': ' + tip for name, tip in PROVIDER_HELP.items())
+        text.insert('1.0', content)
+        text.configure(state='disabled')
+
+    def refresh_models(self):
+        if self.busy:
+            return
+        try:
+            values = {name: variable.get() for name, variable in self.values.items()}
+            config = validate_config(dict(values, model=values['model'] or 'catalog-only'))
+            key = self.checked_key(config)
+            if self.used >= config['session_requests'] or time.monotonic() < self.pause_until:
+                raise ValueError('Request cap or rate-limit pause reached. Wait or raise the session cap explicitly.')
+        except ValueError as error:
+            messagebox.showerror('AI Assistant models', str(error), parent=self.window)
+            return
+        self.config, self.busy = config, True
+        self.used += 1
+        self.send.configure(state='disabled'); self.models_button.configure(state='disabled')
+        self.status.configure(text='Loading model catalog…')
+        threading.Thread(target=self.worker, args=(config, key, None, (config['endpoint'], config['protocol'])), daemon=True).start()
+
+    def current_config(self):
+        return validate_config({name: variable.get() for name, variable in self.values.items()})
+
+    def save_settings(self):
+        try:
+            config = self.current_config()
+            self.editor.write_data(SETTINGS_PATH, json.dumps(config, indent=2).encode('utf-8'))
+        except (ValueError, OSError) as error:
+            messagebox.showerror('AI Assistant settings', str(error), parent=self.window)
+            return
+        self.config = config
+        self.status.configure(text='Settings saved · API key is not stored')
+        self.settings_status.configure(text='Settings saved · API key is not stored')
+
+    def append(self, text):
+        self.welcome.place_forget()
+        role = 'user' if text.startswith('You:\n') else 'assistant' if text.startswith('Assistant:\n') else 'notice'
+        self.output.configure(state='normal')
+        start = self.output.index('end-1c')
+        self.output.insert('end', text, (role,))
+        if role != 'notice':
+            self.output.tag_add('role', start, f'{start} lineend')
+        code = False
+        for line, value in enumerate(text.splitlines()):
+            if value.lstrip().startswith('```'):
+                code = not code
+            elif code:
+                self.output.tag_add('code', f'{start} +{line}lines linestart', f'{start} +{line}lines lineend')
+        self.output.tag_raise('sel')
+        self.output.see('end'); self.output.configure(state='disabled')
+
+    def submit(self):
+        if self.busy:
+            return
+        try:
+            config = self.current_config()
+            if self.used >= config['session_requests']:
+                raise ValueError('Session request limit reached. Raise the limit explicitly to send more.')
+            if time.monotonic() < self.pause_until:
+                raise ValueError('Provider rate limit: wait before sending another request.')
+            prompt = self.prompt.get('1.0', 'end-1c')
+            identity = (config['endpoint'], config['model'], self.mode.get(), config['protocol'])
+            contexts = [attachment_context(self.attachments)] if self.attachments else []
+            if self.attach.get():
+                path = self.api.get_path()
+                contexts.append('--- Current tab: ' + (path.name if path else 'Untitled') + ' ---\n' + self.api.get_text())
+            context = '\n\n'.join(contexts)
+            messages = build_messages(config, self.mode.get(), prompt, context, self.histories.get(identity, []))
+            key = self.checked_key(config)
+        except ValueError as error:
+            messagebox.showerror('AI Assistant', str(error), parent=self.window)
+            return
+        self.pending_prompt = prompt
+        self.config, self.busy = config, True
+        self.used += 1
+        self.send.configure(state='disabled'); self.models_button.configure(state='disabled'); self.status.configure(text=f'Waiting · request {self.used}/{config["session_requests"]}')
+        names = [item['path'].name for item in self.attachments]
+        if self.attach.get():
+            names.append('current tab')
+        self.append('You:\n' + prompt + ('\n[Attached: ' + ', '.join(names) + ']' if names else '') + '\n\n')
+        self.prompt.delete('1.0', 'end')
+        threading.Thread(target=self.worker, args=(config, key, messages, identity), daemon=True).start()
+
+    def worker(self, config, key, messages, identity):
+        try:
+            if messages is None:
+                event = dict(ok=True, models=list_models(config, key), identity=identity)
+            else:
+                reply, usage = send_request(config, key, messages)
+                event = dict(ok=True, reply=reply, usage=usage, identity=identity, messages=messages)
+        except HTTPError as error:
+            status = error.code
+            delay = 0
+            if status == 429:
+                try:
+                    delay = max(1, min(86400, int(error.headers.get('Retry-After', '30'))))
+                except (ValueError, TypeError, AttributeError):
+                    delay = 30
+            message = {400: 'Provider rejected request parameters. Check API format, model ID, token cap, and reasoning support.', 404: 'Model or endpoint not found. Refresh models and check the API URL.', 401: 'API key rejected.', 403: 'Provider denied access to this model.',
+                       402: 'Provider credits or quota exhausted.', 429: 'Provider rate or quota limit; check usage/credits and wait before retrying.'}.get(status, f'Provider returned HTTP {status}.')
+            event = dict(ok=False, message=message, pause=delay)
+        except (URLError, TimeoutError, ConnectionError):
+            event = dict(ok=False, message='Could not reach this provider. Check internet access, proxy/firewall, and endpoint. For Ollama, start the local server and pull a model first.', pause=0)
+        except AIResponseError as error:
+            event = dict(ok=False, message=str(error), pause=0)
+        except Exception:
+            # Worker boundary: return a sanitized result even for malformed provider responses.
+            event = dict(ok=False, message='Request failed or reply was not compatible. Check endpoint, model, connectivity, and reply limit.', pause=0)
+        if not self.stopped.is_set():
+            self.results.put_nowait(event)
+
+    def poll(self):
+        self.poll_job = None
+        try:
+            event = self.results.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self.busy = False
+            if not event['ok'] and self.pending_prompt and not self.prompt.get('1.0', 'end-1c').strip():
+                self.prompt.insert('1.0', self.pending_prompt)
+            self.pending_prompt = None
+            self.send.configure(state='normal'); self.models_button.configure(state='normal')
+            if event['ok'] and 'models' in event:
+                current = (self.values['endpoint'].get().strip(), self.values['protocol'].get())
+                if current == event['identity']:
+                    self.model_picker.configure(values=event['models'])
+                    self.status.configure(text=f'{len(event["models"])} models listed · choose a text model compatible with the selected API format')
+                else:
+                    self.status.configure(text='Provider settings changed; refresh models again.')
+            elif event['ok']:
+                self.last_reply = event['reply']
+                self.histories[event['identity']] = [*event['messages'][1:], {'role': 'assistant', 'content': event['reply']}][-4:]
+                self.append('Assistant:\n' + event['reply'] + '\n\n')
+                tokens = event['usage'].get('total_tokens', 'not reported')
+                self.status.configure(text=f'Ready · {self.used} requests · last tokens: {tokens}')
+                if event['usage'].get('incomplete'):
+                    self.append('Notice: the provider returned an incomplete reply. Review it before use; check provider restrictions or increase the output cap if needed. No automatic retry was sent.\n\n')
+                self.api.emit('ai_assistant.reply', text=event['reply'], model=event['identity'][1])
+            else:
+                self.pause_until = time.monotonic() + event['pause']
+                self.status.configure(text=event['message'])
+                self.append('Notice: ' + event['message'] + '\n\n')
+        if not self.stopped.is_set():
+            self.poll_job = self.root.after(100, self.poll)
 
     def reset(self):
-        if self.process is None:
-            self.histories.clear()
-            self.append("Conversation context reset. Previous messages remain available to copy.\n", role="notice")
+        self.histories.clear()
+        if self.window:
+            self.status.configure(text='History reset · request count is unchanged')
 
-    def help(self):
-        messagebox.showinfo("AI Assistant", "Choose Chat or Code, then Ask or Team.\n"
-            "Enter sends; Shift+Enter adds a new line. Remove files using their × chips.\n"
-            "Ask: select one model and enter a question.\n"
-            "Team: choose a lead, workers from different developers, and a task.\n"
-            "Only explicitly attached documents are sent. Replies never modify the editor.\n"
-            "The AI cannot browse project files, write files, or run commands/tests.\n"
-            "Direct project work needs project-scoped file tools and an edit preview/apply feature.\n"
-            "Copy conversation copies the retained visible prompts and output (including team output).\n"
-            "Older trimmed output and hidden attachment text are not included.\n"
-            "Fast Chat: 4 KiB input, 512 reply tokens, 2 recent turns, 60s timeout.\n"
-            "Fast Code: 12 KiB input (6 KiB for Team), 1,536 reply tokens, 3 turns, 120s timeout.\n"
-            "Teams allow 2 workers; timeouts are 120s Chat / 180s Code.\n"
-            "Older request history is omitted with a notice. Input/files are rejected if too large.\n"
-            "An empty reply is retried once with up to 2,048 Chat / 3,072 Code tokens.\n"
-            "HTTP 429 is not automatically retried; its provider is briefly paused.\n"
-            "Reply caps may leave large answers incomplete. Actual speed depends on the provider/model.\n"
-            "Refresh models updates the list; Reset clears solo histories.\n"
-            "Configure shared API keys and Free plan confirmations using /keys in chat_ai.py or code_ai.py.", parent=self.window)
-
-    def cancel(self):
-        if self.process is not None:
-            self.stop.set()
-            self.process.kill()
-            self.process.wait(timeout=5)
-            self.process = None
-            self.set_running(False)
-            self.status.configure(text="Cancelled")
-        if self.timer is not None:
-            self.root.after_cancel(self.timer)
-            self.timer = None
-
-    def close(self):
-        self.cancel()
-        if self.window is not None:
-            self.window.destroy()
-            self.window = None
+    def open_reply(self):
+        if self.last_reply:
+            self.editor.new()
+            self.api.replace_text(self.last_reply)
 
     def cleanup(self):
-        self.close()
+        self.provider_keys.clear()
+        self.stopped.set()
+        if self.poll_job:
+            self.root.after_cancel(self.poll_job)
+            self.poll_job = None
+        if self.window is not None and self.window.winfo_exists():
+            self.key.set('')
+            self.window.destroy()
 
 
 def register(api):
-    assistant = Assistant(api)
-    api.add_command("AI Chat…", lambda: assistant.open("Chat"))
-    api.add_command("AI Code…", lambda: assistant.open("Code"))
+    AIAssistant(api)
