@@ -1,4 +1,5 @@
 """Pocket Editor command runner. Commands use the system shell."""
+from pocket_editor_plugins._docking import create_window
 import json
 import os
 from pathlib import Path
@@ -269,13 +270,13 @@ def register(api):
         else:
             destroy_window()
 
-    def show():
+    def show(parent=None):
         nonlocal window, folder_var, command_var, output, status
         if window is not None and window.winfo_exists():
             window.deiconify()
             window.lift()
             return
-        window = tk.Toplevel(root)
+        window = create_window(root, parent)
         window.title("Project Terminal")
         window.geometry("840x480")
         window.minsize(560, 320)
@@ -427,6 +428,7 @@ def register(api):
         ttk.Button(actions, text="Save & apply", command=save, style="Accent.TButton").pack(side="right")
         ttk.Button(actions, text="Close", command=dialog.destroy).pack(side="right", padx=8)
 
+    api.add_panel(lambda parent: show(parent), width=600)
     api.add_command("Project Terminal", show)
     api.add_command("Project Terminal Settings…", show_settings)
     if hasattr(api, "provide_service"):

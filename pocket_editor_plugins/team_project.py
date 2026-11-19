@@ -1,4 +1,5 @@
 """Hosted team projects, client invitations, group chat, and shared files."""
+from pocket_editor_plugins._docking import create_window
 from pathlib import Path
 import tkinter as tk
 from pocket_editor_plugins._team_chat_ui import ChatPane
@@ -17,16 +18,17 @@ class TeamProject:
         self.closed = False
         api.add_command("Team Project", self.show)
         api.provide_service("open_project", self.open_project)
+        api.add_panel(lambda parent: self.show(parent), width=720)
         api.on_cleanup(self.cleanup)
 
-    def show(self):
+    def show(self, parent=None):
         if self.closed:
             return
         if self.window is not None and self.window.winfo_exists():
             self.window.deiconify()
             self.window.lift()
             return
-        self.window = tk.Toplevel(self.root)
+        self.window = create_window(self.root, parent)
         self.window.title("Team Project")
         self.window.geometry("900x780")
         self.window.minsize(720, 620)

@@ -9,7 +9,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 THEMES = {
-    "Dark": ("#1e1e1e", "#cccccc", "#264f78", "#858585", "#569cd6", "#ce9178", "#6a9955", "#b5cea8", "#dcdcaa"),
+    "Dark": ("#10151b", "#d1dae4", "#243f59", "#858585", "#569cd6", "#ce9178", "#6a9955", "#b5cea8", "#dcdcaa"),
     "Light": ("#ffffff", "#24292f", "#b6d7ff", "#6e7781", "#0550ae", "#0a3069", "#6e7781", "#953800", "#8250df"),
     "Dracula": ("#282a36", "#f8f8f2", "#44475a", "#6272a4", "#ff79c6", "#f1fa8c", "#6272a4", "#bd93f9", "#50fa7b"),
     "Solarized Dark": ("#002b36", "#839496", "#073642", "#586e75", "#859900", "#2aa198", "#586e75", "#d33682", "#b58900"),

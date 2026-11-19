@@ -43,7 +43,7 @@ class AboutDialog:
         ttk.Label(body, text='Built with Python and Tkinter', style='Muted.TLabel').pack(anchor='w', pady=(0, 12))
         style = ttk.Style(window)
         style.configure('About.TEntry', padding=6)
-        style.map('About.TEntry', fieldbackground=[('readonly', '#1e1e1e')], foreground=[('readonly', '#dddddd')])
+        style.map('About.TEntry', fieldbackground=[('readonly', '#10151b')], foreground=[('readonly', '#dddddd')])
         self.info = ttk.Frame(body); self.info.pack(fill='both', expand=True)
         actions = ttk.Frame(body); actions.pack(fill='x', pady=(12, 0))
         ttk.Button(actions, text='Copy details', command=self.copy).pack(side='left', padx=8)

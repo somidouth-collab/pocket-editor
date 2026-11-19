@@ -160,8 +160,8 @@ def register(api):
         def text_page(title):
             frame = ttk.Frame(notebook)
             notebook.add(frame, text=title)
-            text = tk.Text(frame, wrap='word', font=editor.editor_font, background='#1e1e1e',
-                           foreground='#cccccc', selectbackground='#264f78', borderwidth=0,
+            text = tk.Text(frame, wrap='word', font=editor.editor_font, background='#10151b',
+                           foreground='#d1dae4', selectbackground='#243f59', borderwidth=0,
                            padx=12, pady=10, width=1, height=1)
             scrollbar = ttk.Scrollbar(frame, command=text.yview)
             text.configure(yscrollcommand=scrollbar.set)

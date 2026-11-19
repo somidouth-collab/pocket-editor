@@ -24,7 +24,7 @@ On Windows use `py pocket_editor.py`; on macOS use `python3 pocket_editor.py` wi
 
 ## Appearance and preferences
 
-The interface uses a consistent charcoal palette, a compact New/Open/Save toolbar, a compact Extensions dropdown and optional toolbar shortcuts, wrapping file tabs with close buttons and unsaved markers, and a detailed status bar. Settings → Preferences changes document font, tabs, line numbers, and wrapping. Document font changes do not alter UI or gutter fonts. Code Theme controls the document color scheme independently of the UI palette.
+The interface uses a near-black palette inspired by the reference layout, a compact New/Open/Save toolbar, a compact Extensions dropdown and optional toolbar shortcuts, wrapping file tabs with close buttons and unsaved markers, and a detailed status bar. Settings → Preferences changes document font, tabs, line numbers, and wrapping. Document font changes do not alter UI or gutter fonts. Code Theme controls the document color scheme independently of the UI palette.
 
 Extensions → Add to toolbar lets you check only the commands you want as shortcuts. The toolbar starts empty, saves your selections, and stays on one row. Shortcuts that do not fit the window are available in More; all plugin commands remain in Extensions.
 
@@ -271,3 +271,7 @@ Use **Extensions → Codex Assistant…** to run tasks through your installed Co
 ## Shared loading animation
 
 Codex, AI and Git display a reusable animated orbit during work. Other plugins can use `loading_indicator.start`, `update`, and `stop`. See the [loading service guide](docs/LOADING.md).
+
+## Vertical plugin tabs and docked tools
+
+Use **Settings → Vertical plugin tabs…** or the rail gear to choose your plugins. Choices persist. Click a tab to open/collapse its panel and drag the divider to resize. Explorer, AI, Codex, Git, Terminal, and Team Project support docking; other plugins show explicit command buttons. Plugin dialogs share the new dark styling. See the [interface and panel guide](docs/GUI.md).

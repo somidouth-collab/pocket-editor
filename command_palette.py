@@ -48,7 +48,7 @@ class CommandPalette:
         window = self.window = tk.Toplevel(root)
         window.title('Command Palette')
         window.transient(root)
-        window.configure(background='#252526')
+        window.configure(background='#11161c')
         window.resizable(True, True)
         window.minsize(340, 240)
         root.update_idletasks()
@@ -63,8 +63,8 @@ class CommandPalette:
         self.entry.pack(fill='x', pady=(0, 8))
         panel = ttk.Frame(body)
         panel.pack(fill='both', expand=True)
-        self.results = tk.Listbox(panel, background='#1e1e1e', foreground='#cccccc',
-                                  selectbackground='#264f78', selectforeground='white',
+        self.results = tk.Listbox(panel, background='#10151b', foreground='#d1dae4',
+                                  selectbackground='#243f59', selectforeground='white',
                                   activestyle='none', highlightthickness=0, borderwidth=0,
                                   font=self.editor.ui_font, exportselection=False)
         scrollbar = ttk.Scrollbar(panel, command=self.results.yview)

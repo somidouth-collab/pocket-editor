@@ -11,7 +11,7 @@ from tools.build_release import build_release, collect_files
 
 class ReleaseTests(unittest.TestCase):
     def project(self, root):
-        files={'pocket_editor.py':'print("editor")\n', 'editor_about.py':"DEFAULT_DETAILS = {'name':'Somi Douth','email':'somidouth@gmail.com'}\n",
+        files={'plugin_sidebar.py':'# panel module\n', 'pocket_editor.py':'print("editor")\n', 'editor_about.py':"DEFAULT_DETAILS = {'name':'Somi Douth','email':'somidouth@gmail.com'}\n",
                'README.md':'# Pocket Editor\n', 'docs/index.html':'<html>Pocket Editor</html>',
                'pocket_editor_plugins/team_project.py':'def register(api): pass\n',
                'pocket_editor_plugins/git_project.py':'def register(api): pass\n',

@@ -1,6 +1,7 @@
 """AI Assistant: Chat/Code with explicit provider configuration. See docs/AI_ASSISTANT.md."""
 import json
 import os
+from pocket_editor_plugins._docking import create_window
 from pathlib import Path
 import queue
 import re
@@ -250,6 +251,7 @@ class AIAssistant:
         self.results = queue.Queue(maxsize=1)
         self.stopped = threading.Event()
         self.poll_job = self.root.after(100, self.poll)
+        api.add_panel(lambda parent: self.show(parent), width=580)
         api.on_cleanup(self.cleanup)
         api.add_command('AI Assistant…', self.show)
         api.provide_service('get_status', self.get_status)
@@ -258,11 +260,11 @@ class AIAssistant:
         return {'busy': self.busy, 'requests_used': self.used, 'request_limit': self.config['session_requests'],
                 'cooldown_seconds': max(0, int(self.pause_until - time.monotonic()))}
 
-    def show(self):
+    def show(self, parent=None):
         if self.window is not None and self.window.winfo_exists():
             self.window.deiconify(); self.window.lift()
             return
-        window = self.window = tk.Toplevel(self.root)
+        window = self.window = create_window(self.root, parent)
         window.title('AI Assistant — Chat / Code')
         window.geometry('980x780'); window.minsize(640, 540)
         window.protocol('WM_DELETE_WINDOW', self.hide)
@@ -272,14 +274,14 @@ class AIAssistant:
         self.fonts['label'].configure(size=10, weight='bold')
         self.fonts['mono'] = self.editor.editor_font.copy()
         style = ttk.Style(window)
-        for name, color in (('MyAI.TFrame', '#1e1e1e'), ('MyAI.Composer.TFrame', '#2d2d2d')):
+        for name, color in (('MyAI.TFrame', '#10151b'), ('MyAI.Composer.TFrame', '#19212a')):
             style.configure(name, background=color)
-        style.configure('MyAI.TLabel', background='#1e1e1e', foreground='#cccccc', font=self.fonts['body'])
-        style.configure('MyAI.Title.TLabel', background='#1e1e1e', foreground='#eeeeee', font=self.fonts['title'])
-        style.configure('MyAI.Muted.TLabel', background='#1e1e1e', foreground='#969696', font=self.editor.ui_font)
-        style.configure('MyAI.TCheckbutton', background='#2d2d2d', foreground='#cccccc')
-        style.map('MyAI.TCheckbutton', background=[('active', '#2d2d2d')])
-        window.configure(background='#1e1e1e')
+        style.configure('MyAI.TLabel', background='#10151b', foreground='#d1dae4', font=self.fonts['body'])
+        style.configure('MyAI.Title.TLabel', background='#10151b', foreground='#eeeeee', font=self.fonts['title'])
+        style.configure('MyAI.Muted.TLabel', background='#10151b', foreground='#8e9ba9', font=self.editor.ui_font)
+        style.configure('MyAI.TCheckbutton', background='#19212a', foreground='#d1dae4')
+        style.map('MyAI.TCheckbutton', background=[('active', '#19212a')])
+        window.configure(background='#10151b')
         body = ttk.Frame(window, padding=(22, 16), style='MyAI.TFrame')
         body.pack(fill='both', expand=True)
         header = ttk.Frame(body, style='MyAI.TFrame'); header.pack(fill='x')
@@ -347,16 +349,16 @@ class AIAssistant:
         conversation = ttk.Frame(body, style='MyAI.TFrame')
         conversation.pack(fill='both', expand=True, pady=(12, 16))
         self.output = ScrolledText(conversation, height=6, width=1, state='disabled', wrap='word',
-            background='#1e1e1e', foreground='#cccccc', selectbackground='#264f78',
+            background='#10151b', foreground='#d1dae4', selectbackground='#243f59',
             borderwidth=0, highlightthickness=0, padx=16, pady=14, font=self.fonts['body'], spacing3=8)
         self.output.pack(fill='both', expand=True)
-        self.output.frame.configure(background='#1e1e1e')
-        self.output.vbar.configure(background='#424242', troughcolor='#1e1e1e', borderwidth=0, width=9)
+        self.output.frame.configure(background='#10151b')
+        self.output.vbar.configure(background='#465361', troughcolor='#10151b', borderwidth=0, width=9)
         self.output.tag_configure('user', background='#2a2d2e', lmargin1=100, lmargin2=100, rmargin=14, spacing1=14, spacing3=12)
         self.output.tag_configure('assistant', lmargin1=16, lmargin2=16, rmargin=28, spacing1=14, spacing3=12)
-        self.output.tag_configure('notice', foreground='#969696', lmargin1=16, lmargin2=16)
+        self.output.tag_configure('notice', foreground='#8e9ba9', lmargin1=16, lmargin2=16)
         self.output.tag_configure('role', font=self.fonts['label'], foreground='#3794ff')
-        self.output.tag_configure('code', font=self.fonts['mono'], background='#181818', foreground='#d4d4d4')
+        self.output.tag_configure('code', font=self.fonts['mono'], background='#0b1016', foreground='#d4d4d4')
         self.output.tag_raise('sel')
         self.welcome = ttk.Frame(conversation, style='MyAI.TFrame', padding=16)
         self.welcome.place(relx=.5, rely=.45, anchor='center')
@@ -367,20 +369,20 @@ class AIAssistant:
                               ('Build a plugin', 'Help me build a Pocket Editor plugin.'),
                               ('Review a change', 'Review my attached code for bugs.')):
             ttk.Button(examples, text=label, command=lambda prompt=prompt: self.use_example(prompt)).pack(side='left', padx=4)
-        self.composer = tk.Frame(body, background='#2d2d2d', highlightbackground='#3c3c3c', highlightcolor='#007acc', highlightthickness=1)
+        self.composer = tk.Frame(body, background='#19212a', highlightbackground='#303b47', highlightcolor='#1597f5', highlightthickness=1)
         self.composer.pack(fill='x')
         self.attachment_strip = ttk.Frame(self.composer, padding=(10, 6, 10, 0), style='MyAI.Composer.TFrame')
         self.attachment_strip.pack(fill='x')
         self.attachment_strip.bind('<Configure>', lambda event: self.layout_attachments())
-        ttk.Label(self.composer, text='Message', background='#2d2d2d', foreground='#969696').pack(anchor='w', padx=14, pady=(10, 0))
-        self.prompt = tk.Text(self.composer, height=4, width=1, wrap='word', background='#2d2d2d', foreground='#dddddd',
-            insertbackground='#3794ff', selectbackground='#264f78', borderwidth=0, highlightthickness=0,
+        ttk.Label(self.composer, text='Message', background='#19212a', foreground='#8e9ba9').pack(anchor='w', padx=14, pady=(10, 0))
+        self.prompt = tk.Text(self.composer, height=4, width=1, wrap='word', background='#19212a', foreground='#dddddd',
+            insertbackground='#3794ff', selectbackground='#243f59', borderwidth=0, highlightthickness=0,
             padx=14, pady=8, font=self.fonts['body'], undo=True)
         self.prompt.pack(fill='x')
         self.prompt.bind('<Return>', self.send_enter)
         self.prompt.bind('<Control-Return>', lambda event: self.submit() or 'break')
-        self.prompt.bind('<FocusIn>', lambda event: self.composer.configure(highlightbackground='#007acc'))
-        self.prompt.bind('<FocusOut>', lambda event: self.composer.configure(highlightbackground='#3c3c3c'))
+        self.prompt.bind('<FocusIn>', lambda event: self.composer.configure(highlightbackground='#1597f5'))
+        self.prompt.bind('<FocusOut>', lambda event: self.composer.configure(highlightbackground='#303b47'))
         composer_controls = ttk.Frame(self.composer, padding=(10, 0, 10, 10), style='MyAI.Composer.TFrame')
         composer_controls.pack(fill='x')
         self.attach = tk.BooleanVar(window, False)

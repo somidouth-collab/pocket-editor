@@ -110,7 +110,9 @@ class SplitEditor:
             title.configure(text=('●  ' if text.edit_modified() or document['rich_dirty'] else '') +
                             (path.name if path else 'Untitled'),
                             foreground='#ffffff' if document is editor.active_document else '#bdbdbd',
-                            background='#1e1e1e' if document is editor.active_document else '#2d2d2d')
+                            background='#10151b' if document is editor.active_document else '#19212a')
+            if self.enabled:title.grid()
+            else:title.grid_remove()
             text.grid(in_=frame, row=1, column=1, sticky='nsew')
             gutter.configure(background=text.cget('background'))
             gutter.grid(in_=frame, row=1, column=0, sticky='ns')

@@ -29,8 +29,14 @@ def register(api):
     project = None
     project_file = None
     paths = {}
+    folder_icon = tk.PhotoImage(master=root,width=16,height=16)
+    folder_icon.put('#71869a',to=(1,4,15,14));folder_icon.put('#11161c',to=(2,5,14,13));folder_icon.put('#71869a',to=(2,2,7,5))
+    file_icon = tk.PhotoImage(master=root,width=16,height=16)
+    file_icon.put('#71869a',to=(4,1,13,15));file_icon.put('#11161c',to=(5,2,12,14))
+
     visible = False
     sidebar = ttk.Frame(editor.workspace, padding=(14, 14), width=260)
+    sidebar._tree_icons = (folder_icon,file_icon)
     header = ttk.Frame(sidebar)
     header.pack(fill="x", pady=(0, 8))
     heading = ttk.Label(header, text="PROJECT", anchor="w", style="Caption.TLabel")
@@ -58,6 +64,9 @@ def register(api):
 
     def toggle():
         nonlocal visible
+        if hasattr(editor, "plugin_sidebar"):
+            editor.plugin_sidebar.toggle(api.plugin_id)
+            return
         if visible:
             sidebar.pack_forget()
         else:
@@ -68,7 +77,7 @@ def register(api):
         suffix = "/" if path.is_dir() else ""
         if path.is_symlink():
             suffix += " ↗"
-        item = tree.insert(parent, "end", text=path.name + suffix)
+        item = tree.insert(parent, "end", text=path.name + suffix, image=folder_icon if path.is_dir() else file_icon)
         paths[item] = path
         if path.is_dir() and not path.is_symlink():
             tree.insert(item, "end", text="Loading…")
@@ -101,7 +110,7 @@ def register(api):
             tree.delete(item)
         if project is None:
             return
-        item = tree.insert("", "end", text=project.name or str(project), open=True)
+        item = tree.insert("", "end", text=project.name or str(project), image=folder_icon, open=True)
         paths[item] = project
         populate(item)
         tree.selection_set(item)
@@ -116,7 +125,9 @@ def register(api):
         project, project_file = directory, filename
         heading.configure(text=project.name or str(project))
         refresh()
-        if not visible:
+        if hasattr(editor, "plugin_sidebar"):
+            editor.plugin_sidebar.open(api.plugin_id)
+        elif not visible:
             toggle()
         notify(str(project))
         if hasattr(api, "emit"):
@@ -355,6 +366,10 @@ def register(api):
         api.provide_service("open_project", activate_project)
         api.on("project_changed", lambda source, **payload: refresh()
                if source != api.plugin_id else None)
+    def mount(parent):
+        sidebar.pack(in_=parent, fill="both", expand=True)
+        return sidebar
+    api.add_panel(mount, width=320)
     api.on_cleanup(sidebar.destroy)
     api.add_command("Project Explorer", toggle)
     api.add_command("Open Project", choose_project)

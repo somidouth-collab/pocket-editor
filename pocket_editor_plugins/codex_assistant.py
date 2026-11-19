@@ -1,4 +1,5 @@
 """Codex CLI in Pocket Editor; uses the user's own CLI authentication."""
+from pocket_editor_plugins._docking import create_window
 from pathlib import Path
 import queue
 import threading
@@ -18,6 +19,7 @@ class CodexAssistant:
         self.busy, self.closed, self.last_reply = False, False, ''
         api.add_command('Codex Assistant…', self.show)
         api.provide_service('get_status', lambda: {'busy': self.busy})
+        api.add_panel(lambda parent: self.show(parent), width=650)
         api.on_cleanup(self.cleanup)
 
     def project_folder(self):
@@ -29,10 +31,10 @@ class CodexAssistant:
         path = self.api.get_path()
         return str(path.parent if path else Path.cwd())
 
-    def show(self):
+    def show(self, parent=None):
         if self.window is not None and self.window.winfo_exists():
             self.window.deiconify(); self.window.lift(); return
-        self.window = window = tk.Toplevel(self.root)
+        self.window = window = create_window(self.root, parent)
         window.title('Codex Assistant'); window.geometry('900x760'); window.minsize(660, 560)
         window.protocol('WM_DELETE_WINDOW', window.withdraw)
         body = ttk.Frame(window, padding=18); body.pack(fill='both', expand=True)

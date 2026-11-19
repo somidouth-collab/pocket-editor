@@ -165,3 +165,7 @@ The Git plugin works without Project Explorer or Team Project. Project Explorer 
 ## Shared loading indicator
 
 Use the GUI-thread services `loading_indicator.start(message="Working…")`, `loading_indicator.update(token, progress=0.5)`, and `loading_indicator.stop(token)`. Stop on both success/failure and plugin cleanup. See [the loading guide](docs/LOADING.md) for optional-dependency adapters, embedding, and concurrent operations.
+
+## Docked panels and vertical tabs
+
+Call `api.add_panel(factory, width=360)` to expose one primary tool panel. The GUI-thread factory receives a parent and creates its content inside it. The plugin then appears in the user-selected vertical tab picker. See [panel examples and lifecycle](docs/GUI.md). Hidden panels preserve state; register cleanup for workers and resources.

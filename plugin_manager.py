@@ -40,7 +40,7 @@ class PluginManager:
         self.tree.pack(fill='both', expand=True)
         details_panel = ttk.Frame(body)
         details_panel.pack(fill='both', expand=True, pady=10)
-        self.details = tk.Text(details_panel, background='#1e1e1e', foreground='#cccccc',
+        self.details = tk.Text(details_panel, background='#10151b', foreground='#d1dae4',
                                font=self.editor.ui_font, wrap='word', height=9, borderwidth=0,
                                padx=10, pady=8, state='disabled')
         details_scroll = ttk.Scrollbar(details_panel, command=self.details.yview)

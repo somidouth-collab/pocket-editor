@@ -1,10 +1,11 @@
-# Pocket Editor — 2026.11.19.post1
+# Pocket Editor — 2026.11.19.post2
 
 Created by **Somi Douth** · somidouth@gmail.com
 
-- Added **Codex Assistant** with installed-CLI discovery, terminal login/setup guidance, project selection, optional tab snapshots, read-only defaults and explicit workspace edits.
-- Added Stop/process-tree cleanup, bounded prompts/replies, and a five-minute task timeout. Requests use the user's existing Codex CLI account/configuration. No model request is sent automatically.
-- Added a reusable blue/violet orbit loading animation with independent job tokens, optional embedded placement and progress updates. Codex, AI model/reply requests and Git operations use it.
-- Added in-editor Codex help, offline HTML guides and a shared loading-service example for plugin authors.
+- Updated the editor and default plugin styling to follow the supplied GUI reference: near-black surfaces, blue accents, a slim activity rail, compact document tabs and a docked Explorer.
+- Added user-selected vertical plugin tabs, persisted choices, panel resizing/collapse, hover labels and keyboard activation. The horizontal shortcut toolbar is retained and hidden when empty.
+- Added state-preserving docked panels for Explorer, AI Assistant, Codex, Git, Terminal and Team Project. Other plugins expose explicit action lists without running transformations when a tab is selected.
+- Added `PluginAPI.add_panel(factory, width=360)` and documented panel lifecycle for third-party plugins. Docked tools retain their normal settings dialogs and existing standalone-window behavior.
+- Removed redundant single-pane file headings, refreshed the preview images and updated offline Help.
 
-Offline tests use a fake CLI and do not consume Codex credits. Full Codex account/model behavior depends on the user's CLI installation, login, configuration and platform sandbox. This release retains the Gemini and consolidated language-plugin fixes from 2026.11.19. License remains undecided.
+The layout is implemented with Tk/ttk and built-in vector icons; it has no additional application dependency. Native title bars and menus follow the operating system. The reference image is not required at runtime. Versioned PyPI runtime folders remain separate; restart after upgrading. License remains undecided.

@@ -3,6 +3,7 @@ import os
 import json
 import sys
 import webbrowser
+from pocket_editor_plugins._docking import create_window
 from pathlib import Path
 import queue
 import subprocess
@@ -116,14 +117,15 @@ class GitProject:
         api.provide_service("ensure_repository", self.ensure_repository)
         api.provide_service("get_repository", self.get_repository)
         api.provide_service("get_project", self.get_repository)
+        api.add_panel(lambda parent: self.show(parent), width=640)
         api.on_cleanup(self.cleanup)
 
-    def show(self):
+    def show(self, parent=None):
         if self.window is not None and self.window.winfo_exists():
             self.window.deiconify()
             self.window.lift()
             return
-        self.window = tk.Toplevel(self.root)
+        self.window = create_window(self.root, parent)
         self.window.title("Git Project")
         self.window.geometry("780x650")
         self.window.minsize(620, 520)

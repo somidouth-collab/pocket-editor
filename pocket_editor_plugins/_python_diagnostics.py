@@ -144,7 +144,7 @@ class Diagnostics:
         else:
             message = result['message']
         if error or manual or result['status'] == 'skipped':
-            self.label.configure(text=message, foreground='#f48771' if error else '#969696')
+            self.label.configure(text=message, foreground='#f48771' if error else '#8e9ba9')
             self.footer.grid(row=2, column=0, columnspan=3, sticky='ew')
 
     def jump(self):

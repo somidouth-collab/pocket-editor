@@ -22,10 +22,11 @@ from quick_open import QuickOpen
 from plugin_manager import PluginManager
 from split_editor import SplitEditor
 from editor_about import AboutDialog
+from plugin_sidebar import PluginSidebar, DEFAULT_PINS
 
 PLUGIN_DIR = Path(__file__).resolve().parent / "pocket_editor_plugins"
 SETTINGS_PATH = PLUGIN_DIR.parent / "pocket_editor_settings.json"
-DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "toolbar_commands": [], "disabled_plugins": []}
+DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "toolbar_commands": [], "disabled_plugins": [], "sidebar_plugins": list(DEFAULT_PINS), "sidebar_active": "project_explorer", "sidebar_width": 320}
 EXAMPLE = '''"""Add a command that counts words in the current document."""
 from tkinter import messagebox
 
@@ -124,6 +125,8 @@ class PluginAPI:
         self._services = {}
         self._commands = []
         self._cleanups = []
+        self._panel_factory = None
+        self._panel_width = 360
 
     def on_cleanup(self, callback):
         if not callable(callback):
@@ -175,6 +178,12 @@ class PluginAPI:
             raise LookupError(f"Service unavailable: {qualified_name}")
         return provider._services[name](*args, **kwargs)
 
+    def add_panel(self, factory, width=360):
+        """Register a GUI-thread factory that creates this plugin's docked panel."""
+        if not callable(factory) or not 180 <= width <= 900:
+            raise ValueError("Provide a panel factory and a width between 180 and 900.")
+        self._panel_factory, self._panel_width = factory, width
+
     def add_command(self, label, callback):
         if not isinstance(label, str) or not label.strip() or not callable(callback):
             raise ValueError("Provide a command label and a callable")
@@ -223,6 +232,12 @@ def read_settings():
             isinstance(name, str) and 0 < len(name) <= 255 and name not in (".", "..") and
             not name.startswith("_") and not any(char in name for char in "/\\\0") for name in disabled):
         settings["disabled_plugins"] = sorted(set(disabled))
+    pins=saved.get('sidebar_plugins')
+    if isinstance(pins,list) and len(pins)<=100 and all(isinstance(item,str) and item.isidentifier() and not item.startswith('_') for item in pins):settings['sidebar_plugins']=list(dict.fromkeys(pins))
+    active=saved.get('sidebar_active','project_explorer')
+    if active is None or isinstance(active,str) and active.isidentifier():settings['sidebar_active']=active
+    width=saved.get('sidebar_width',320)
+    if type(width) is int and 180<=width<=900:settings['sidebar_width']=width
     return settings
 
 
@@ -269,7 +284,7 @@ class Editor:
         self.modifier = "Command" if root.tk.call("tk", "windowingsystem") == "aqua" else "Control"
 
         self.setup_appearance()
-        root.geometry("1100x740")
+        root.geometry("1280x840")
         root.minsize(480, 320)
         root.protocol("WM_DELETE_WINDOW", self.quit)
         self.plugin_buttons = []
@@ -283,19 +298,20 @@ class Editor:
         self.plugin_overflow = ttk.Menubutton(self.plugin_strip, text="More",
                                              menu=self.plugin_overflow_menu, style="Extensions.TMenubutton")
         self.plugin_strip.bind("<Configure>", self.layout_plugin_buttons)
-        self.document_bar = ttk.Frame(root, style="Chrome.TFrame", padding=(0, 0))
-        self.document_bar.pack(fill="x")
-        self.plugin_strip.pack(fill="x", before=self.document_bar)
-        self.tabs = ttk.Frame(self.document_bar)
-        self.tabs.pack(fill="x")
-        self.tabs.bind("<Configure>", lambda event: self.layout_tabs())
-        # Retain these status widgets for integrations; filenames live in the tabs.
-        self.document_label = ttk.Label(self.document_bar)
-        self.document_state = ttk.Label(self.document_bar)
-        ttk.Separator(root).pack(fill="x")
+        self.plugin_strip.pack(fill="x")
         self.workspace = ttk.Frame(root)
         self.workspace.pack(fill="both", expand=True)
-        panel = ttk.Frame(self.workspace)
+        self.plugin_sidebar = PluginSidebar(self, self.workspace, settings)
+        editor_host = self.plugin_sidebar.editor_host
+        self.document_bar = ttk.Frame(editor_host, style="Chrome.TFrame", padding=(0, 0))
+        self.document_bar.pack(fill="x")
+        self.tabs = ttk.Frame(self.document_bar)
+        self.tabs.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.document_bar, text="+", width=3, command=self.new, style="Plugin.TButton").pack(side="right", padx=4)
+        self.tabs.bind("<Configure>", lambda event: self.layout_tabs())
+        self.document_label = ttk.Label(self.document_bar)
+        self.document_state = ttk.Label(self.document_bar)
+        panel = ttk.Frame(editor_host)
         self.editor_panel = panel
         panel.pack(fill="both", expand=True)
         panel.columnconfigure(1, weight=1)
@@ -303,8 +319,8 @@ class Editor:
         self.buffer = DocumentText(panel, self.document_changed, undo=True, maxundo=200, wrap="none",
                               font=self.editor_font, padx=12, pady=10, width=1, height=1,
                               borderwidth=0, highlightthickness=0,
-                              background="#1e1e1e", foreground="#cccccc",
-                              insertbackground="#007acc", selectbackground="#264f78",
+                              background="#10151b", foreground="#d1dae4",
+                              insertbackground="#1597f5", selectbackground="#243f59",
                               selectforeground="#ffffff", insertwidth=2,
                               spacing1=2, spacing3=2)
         self.buffer = ActiveBuffer(root, self.buffer)
@@ -352,14 +368,14 @@ class Editor:
         self.caption_font.configure(size=9, weight="bold")
         self.gutter_font.configure(size=10)
         self.gutter_ink = "#858585"
-        self.root.configure(background="#252526")
+        self.root.configure(background="#11161c")
         # These option defaults also style plugin windows without touching Tk named fonts.
-        for pattern, value in (("*Toplevel.background", "#252526"),
-                               ("*Menu.background", "#252526"),
-                               ("*Menu.foreground", "#cccccc"),
-                               ("*Menu.activeBackground", "#3c3c3c"),
+        for pattern, value in (("*Toplevel.background", "#11161c"),
+                               ("*Menu.background", "#11161c"),
+                               ("*Menu.foreground", "#d1dae4"),
+                               ("*Menu.activeBackground", "#303b47"),
                                ("*Menu.activeForeground", "#ffffff"),
-                               ("*Menu.selectColor", "#007acc"),
+                               ("*Menu.selectColor", "#1597f5"),
                                ("*Menu.relief", "flat"),
                                ("*Menu.borderWidth", 0),
                                ("*Menu.font", self.ui_font)):
@@ -367,67 +383,68 @@ class Editor:
         style = ttk.Style(self.root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure(".", background="#252526", foreground="#cccccc", font=self.ui_font,
-                        bordercolor="#333333", lightcolor="#333333", darkcolor="#333333")
-        style.configure("TNotebook", background="#252526", borderwidth=0, tabmargins=(0, 0, 0, 0))
-        style.configure("TNotebook.Tab", background="#2d2d2d", foreground="#bdbdbd", padding=(12, 7), font=self.ui_font)
-        style.map("TNotebook.Tab", background=[("disabled", "#252526"), ("selected", "#1e1e1e"), ("active", "#3c3c3c")],
+        style.configure(".", background="#11161c", foreground="#d1dae4", font=self.ui_font,
+                        bordercolor="#27323d", lightcolor="#27323d", darkcolor="#27323d")
+        style.configure("TNotebook", background="#11161c", borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab", background="#19212a", foreground="#bdbdbd", padding=(12, 7), font=self.ui_font)
+        style.map("TNotebook.Tab", background=[("disabled", "#11161c"), ("selected", "#10151b"), ("active", "#303b47")],
                   foreground=[("disabled", "#777777"), ("selected", "#ffffff"), ("active", "#ffffff")])
-        style.configure("TFrame", background="#252526")
-        style.configure("Chrome.TFrame", background="#252526")
-        style.configure("TLabel", background="#252526", foreground="#cccccc")
+        style.configure("TFrame", background="#11161c")
+        style.configure("Chrome.TFrame", background="#11161c")
+        style.configure("TLabel", background="#11161c", foreground="#d1dae4")
         style.configure("Title.TLabel", font=self.heading_font, foreground="#eeeeee")
-        style.configure("Caption.TLabel", font=self.caption_font, foreground="#969696")
-        style.configure("Muted.TLabel", foreground="#969696")
-        style.configure("Document.TLabel", background="#1e1e1e", foreground="#ffffff", padding=(14, 9))
-        style.configure("Status.TLabel", background="#181818", foreground="#bdbdbd", font=self.ui_font)
-        style.configure("TButton", width=0, padding=(10, 4), background="#2d2d2d", foreground="#dddddd",
-                        borderwidth=1, relief="flat", focusthickness=1, focuscolor="#007acc")
-        style.map("TButton", background=[("pressed", "#454545"), ("active", "#3c3c3c")],
+        style.configure("Brand.TLabel", font=(self.ui_font.cget("family"), 14), foreground="#e4eaf1")
+        style.configure("Caption.TLabel", font=self.caption_font, foreground="#8e9ba9")
+        style.configure("Muted.TLabel", foreground="#8e9ba9")
+        style.configure("Document.TLabel", background="#10151b", foreground="#ffffff", padding=(14, 9))
+        style.configure("Status.TLabel", background="#0b1016", foreground="#bdbdbd", font=self.ui_font)
+        style.configure("TButton", width=0, padding=(10, 4), background="#19212a", foreground="#dddddd",
+                        borderwidth=1, relief="flat", focusthickness=1, focuscolor="#1597f5")
+        style.map("TButton", background=[("pressed", "#454545"), ("active", "#303b47")],
                   foreground=[("disabled", "#777777")])
-        style.configure("Accent.TButton", background="#007acc", foreground="#ffffff")
+        style.configure("Accent.TButton", background="#1597f5", foreground="#ffffff")
         style.map("Accent.TButton", background=[("pressed", "#005a9e"), ("active", "#168bd2")],
                   foreground=[("active", "#ffffff")])
-        style.configure("Extensions.TMenubutton", padding=(9, 4), background="#2d2d2d",
-                        foreground="#cccccc", borderwidth=0, arrowcolor="#007acc")
-        style.map("Extensions.TMenubutton", background=[("active", "#3c3c3c")])
-        style.configure("Plugin.TButton", background="#252526", foreground="#bdbdbd", padding=(9, 4))
-        style.map("Plugin.TButton", background=[("pressed", "#3c3c3c"), ("active", "#353535")])
-        style.configure("TEntry", fieldbackground="#1e1e1e", foreground="#dddddd", padding=7,
-                        insertcolor="#007acc")
-        style.configure("TCombobox", fieldbackground="#1e1e1e", background="#2d2d2d", padding=6,
-                        foreground="#dddddd", arrowcolor="#007acc")
-        style.map("TCombobox", fieldbackground=[("readonly", "#1e1e1e")],
-                  foreground=[("readonly", "#dddddd")], selectbackground=[("readonly", "#264f78")])
-        self.root.option_add("*TCombobox*Listbox.background", "#252526")
+        style.configure("Extensions.TMenubutton", padding=(9, 4), background="#19212a",
+                        foreground="#d1dae4", borderwidth=0, arrowcolor="#1597f5")
+        style.map("Extensions.TMenubutton", background=[("active", "#303b47")])
+        style.configure("Plugin.TButton", background="#11161c", foreground="#bdbdbd", padding=(9, 4))
+        style.map("Plugin.TButton", background=[("pressed", "#303b47"), ("active", "#353535")])
+        style.configure("TEntry", fieldbackground="#10151b", foreground="#dddddd", padding=7,
+                        insertcolor="#1597f5")
+        style.configure("TCombobox", fieldbackground="#10151b", background="#19212a", padding=6,
+                        foreground="#dddddd", arrowcolor="#1597f5")
+        style.map("TCombobox", fieldbackground=[("readonly", "#10151b")],
+                  foreground=[("readonly", "#dddddd")], selectbackground=[("readonly", "#243f59")])
+        self.root.option_add("*TCombobox*Listbox.background", "#11161c")
         self.root.option_add("*TCombobox*Listbox.foreground", "#dddddd")
-        self.root.option_add("*TCombobox*Listbox.selectBackground", "#264f78")
+        self.root.option_add("*TCombobox*Listbox.selectBackground", "#243f59")
         self.root.option_add("*TCombobox*Listbox.font", self.ui_font)
-        style.configure("TSpinbox", fieldbackground="#1e1e1e", foreground="#dddddd", padding=6,
-                        background="#2d2d2d", arrowcolor="#007acc")
+        style.configure("TSpinbox", fieldbackground="#10151b", foreground="#dddddd", padding=6,
+                        background="#19212a", arrowcolor="#1597f5")
         for control in ("TCheckbutton", "TRadiobutton"):
-            style.configure(control, padding=(0, 5), background="#252526", foreground="#cccccc")
-            style.map(control, background=[("active", "#252526")],
-                      indicatorbackground=[("selected", "#007acc"), ("!selected", "#3c3c3c")])
-        style.configure("TLabelframe", background="#252526", bordercolor="#3c3c3c", relief="solid")
-        style.configure("TLabelframe.Label", foreground="#bbbbbb", background="#252526")
-        style.configure("TSeparator", background="#333333")
-        style.configure("Treeview", background="#252526", fieldbackground="#252526",
-                        foreground="#cccccc", rowheight=24, borderwidth=0)
-        style.map("Treeview", background=[("selected", "#264f78")], foreground=[("selected", "#ffffff")])
+            style.configure(control, padding=(0, 5), background="#11161c", foreground="#d1dae4")
+            style.map(control, background=[("active", "#11161c")],
+                      indicatorbackground=[("selected", "#1597f5"), ("!selected", "#303b47")])
+        style.configure("TLabelframe", background="#11161c", bordercolor="#303b47", relief="solid")
+        style.configure("TLabelframe.Label", foreground="#bbbbbb", background="#11161c")
+        style.configure("TSeparator", background="#27323d")
+        style.configure("Treeview", background="#11161c", fieldbackground="#11161c",
+                        foreground="#d1dae4", rowheight=24, borderwidth=0)
+        style.map("Treeview", background=[("selected", "#243f59")], foreground=[("selected", "#ffffff")])
         for orientation in ("Vertical", "Horizontal"):
-            style.configure(orientation + ".TScrollbar", background="#424242", troughcolor="#1e1e1e",
-                            borderwidth=0, arrowsize=10, arrowcolor="#969696")
+            style.configure(orientation + ".TScrollbar", background="#465361", troughcolor="#10151b",
+                            borderwidth=0, width=8, arrowsize=7, arrowcolor="#465361")
             style.map(orientation + ".TScrollbar", background=[("active", "#565656")])
 
     def build_header(self):
-        header = ttk.Frame(self.root, padding=(12, 6), style="Chrome.TFrame")
+        header = ttk.Frame(self.root, padding=(14, 10), style="Chrome.TFrame")
         header.pack(fill="x")
         header.columnconfigure(0, weight=1)
         brand = ttk.Frame(header)
         brand.grid(row=0, column=0, sticky="w")
-        ttk.Label(brand, text="▏", foreground="#007acc", font=self.heading_font).pack(side="left", padx=(0, 4))
-        ttk.Label(brand, text="Pocket Editor", style="Title.TLabel").pack(side="left")
+        ttk.Label(brand, text="▏", foreground="#1597f5", font=self.heading_font).pack(side="left", padx=(0, 4))
+        ttk.Label(brand, text="Pocket Editor", style="Brand.TLabel").pack(side="left")
         actions = ttk.Frame(header)
         actions.grid(row=0, column=1, sticky="e", padx=(16, 0))
         for label, command, style in (("New", self.new, "TButton"),
@@ -515,6 +532,7 @@ class Editor:
                                  command=self.save_settings)
         settings.add_separator()
         settings.add_command(label="Preferences…", command=self.preferences)
+        settings.add_command(label="Vertical plugin tabs…", command=self.plugin_sidebar.choose)
         settings.add_command(label="Plugin Manager…", command=self.plugin_manager.show)
         if self.safe_mode:
             self.plugins.add_command(label="Plugins disabled in safe mode", state="disabled")
@@ -586,16 +604,16 @@ class Editor:
                     "newline": self.newline, "bom": self.bom, "rich_dirty": self.rich_dirty}
         self.documents.append(document)
         self.active_document = document
-        tab = tk.Frame(self.tabs, background="#2d2d2d", highlightthickness=0)
-        accent = tk.Frame(tab, height=2, background="#333333")
+        tab = tk.Frame(self.tabs, background="#19212a", highlightthickness=0)
+        accent = tk.Frame(tab, height=2, background="#27323d")
         accent.pack(fill="x")
-        label = tk.Label(tab, background="#2d2d2d", foreground="#cccccc",
+        label = tk.Label(tab, background="#19212a", foreground="#d1dae4",
                          font=self.ui_font, padx=10, pady=7, anchor="w")
         label.pack(side="left", fill="x", expand=True)
         close = tk.Button(tab, text="×", command=lambda: self.close_document(document),
-                          background="#2d2d2d", foreground="#cccccc", activebackground="#454545",
+                          background="#19212a", foreground="#d1dae4", activebackground="#454545",
                           activeforeground="white", relief="flat", borderwidth=0,
-                          font=self.ui_font, padx=6, takefocus=True)
+                          font=self.ui_font, padx=6, takefocus=True, highlightthickness=0)
         close.pack(side="right", padx=(0, 4), before=label)
         label.bind("<Button-1>", lambda event: self.select_document(document))
         document.update(tab=tab, label=label, close=close, accent=accent)
@@ -608,8 +626,9 @@ class Editor:
     def layout_tabs(self):
         # Wrap rows so every open file and its close button remain reachable.
         available = max(1, self.tabs.winfo_width())
-        columns = max(1, available // 200)
-        width = max(1, available // columns - 1)
+        target = max(130, min(220, max((doc["label"].winfo_reqwidth() + doc["close"].winfo_reqwidth() + 14 for doc in self.documents), default=130)))
+        columns = max(1, available // target)
+        width = min(target, max(1, available // columns - 1))
         for index, document in enumerate(self.documents):
             tab = document["tab"]
             tab.configure(width=width, height=document["label"].winfo_reqheight() + 3)
@@ -629,13 +648,13 @@ class Editor:
             if path and any(other is not document and other["path"] and other["path"].name == path.name for other in self.documents):
                 title += " · " + path.parent.name
             title = title if len(title) <= 30 else title[:27] + "…"
-            background = "#1e1e1e" if active else "#2d2d2d"
+            background = "#10151b" if active else "#19212a"
             foreground = "#e5c07b" if dirty else "#ffffff" if active else "#bdbdbd"
             document["tab"].configure(background=background)
             document["label"].configure(text=("●  " if dirty else "") + title,
                                          background=background, foreground=foreground)
-            document["close"].configure(background=background, foreground="#dddddd" if active else "#969696")
-            document["accent"].configure(background="#007acc" if active else "#333333")
+            document["close"].configure(background=background, foreground="#dddddd" if active else "#8e9ba9")
+            document["accent"].configure(background="#1597f5" if active else "#27323d")
         self.layout_tabs()
         if hasattr(self, "split_editor"):
             for side, document in enumerate(self.split_editor.documents):
@@ -784,6 +803,7 @@ class Editor:
             self.session.finish()
         self.closing = True
         self.quick_open.close()
+        self.plugin_sidebar.cleanup()
         for api in reversed(tuple(self.plugin_apis.values())):
             self.cleanup_plugin(api)
         def descendants(widget):
@@ -814,6 +834,7 @@ class Editor:
     def save_settings(self):
         self.apply_settings()
         settings = {
+            **self.plugin_sidebar.settings(),
             "line_numbers": self.line_numbers.get(),
             "word_wrap": self.word_wrap.get(),
             "font_size": self.editor_font.cget("size"),
@@ -1010,6 +1031,7 @@ class Editor:
         menu.add_command(label="Plugin Folder…", command=self.show_plugin_folder)
         menu.add_command(label="Install Example Plugin", command=self.install_example)
         shortcuts = tk.Menu(menu, tearoff=False)
+        menu.add_command(label="Choose vertical plugin tabs…", command=self.plugin_sidebar.choose)
         menu.add_cascade(label="Add to toolbar", menu=shortcuts)
         menu.add_separator()
         groups = {}
@@ -1039,6 +1061,8 @@ class Editor:
                                       command=lambda key=key: self.toggle_toolbar_command(key))
             shortcuts.add_cascade(label=title, menu=first_page)
 
+        self.plugin_sidebar.refresh()
+
     def dispatch_plugin_event(self, event, source, payload):
         if self.closing:
             return
@@ -1060,6 +1084,10 @@ class Editor:
         self.save_settings()
 
     def rebuild_plugin_buttons(self):
+        if self.toolbar_commands:
+            self.plugin_strip.pack(fill="x", before=self.workspace)
+        else:
+            self.plugin_strip.pack_forget()
         for button in self.plugin_buttons:
             button.destroy()
         self.plugin_buttons.clear()

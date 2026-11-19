@@ -16,7 +16,7 @@ class TabsAboutTests(unittest.TestCase):
     def test_notebook_and_document_tab_colors(self):
         style = ttk.Style(self.root)
         self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ('selected',)), '#ffffff')
-        self.assertEqual(style.lookup('TNotebook.Tab', 'background', ('selected',)), '#1e1e1e')
+        self.assertEqual(style.lookup('TNotebook.Tab', 'background', ('selected',)), '#10151b')
         self.assertEqual(style.lookup('TNotebook.Tab', 'foreground', ('disabled',)), '#777777')
         e = self.editor; first = e.active_document
         e.new(); second = e.active_document

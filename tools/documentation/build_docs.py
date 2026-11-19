@@ -10,7 +10,7 @@ from urllib.parse import quote, unquote, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'docs'
 PAGES = [
-    ('index', 'Start here', 'Overview'), ('editor', 'Using the editor', 'Editor'),
+    ('index', 'Start here', 'Overview'), ('gui', 'Interface & vertical tabs', 'Editor'), ('editor', 'Using the editor', 'Editor'),
     ('plugins', 'Plugin catalog', 'Plugins'), ('terminal', 'Project Terminal', 'Terminal'),
     ('codex', 'Codex Assistant', 'AI'), ('loading', 'Shared loading animation', 'Plugins'), ('ai', 'AI Assistant & Gemini', 'AI'), ('custom-ai', 'Your own AI plugin', 'AI'),
     ('plugin-development', 'Plugin development', 'Developers'), ('build-your-ai', 'AI builder prompt', 'Developers'),
@@ -19,7 +19,7 @@ PAGES = [
     ('handbook', 'Full project handbook', 'Reference')]
 SOURCE_MAP = {'TEAM_WORK.md': 'team-work.html', 'README.md': 'handbook.html', 'PLUGIN_DEVELOPMENT.md': 'plugin-development.html',
               'examples/custom_ai/README.md': 'custom-ai.html', 'examples/custom_ai/BUILD_PROMPT.md': 'build-your-ai.html',
-              'docs/CODEX.md': 'codex.html', 'docs/LOADING.md': 'loading.html', 'docs/AI_ASSISTANT.md': 'ai.html', 'examples/php/README.md': 'php.html'}
+              'docs/GUI.md': 'gui.html', 'docs/CODEX.md': 'codex.html', 'docs/LOADING.md': 'loading.html', 'docs/AI_ASSISTANT.md': 'ai.html', 'examples/php/README.md': 'php.html'}
 
 
 def slug(value):
@@ -165,6 +165,7 @@ def build():
         'index': ('# Pocket Editor documentation\n\nA complete local guide to the editor, its bundled plugins, and building your own tools. Created by **Somi Douth** · [somidouth@gmail.com](mailto:somidouth@gmail.com).\n\n## Start in three steps\n\n1. Launch `python3 -B pocket_editor.py` from the project directory.\n2. Open files or a project, then use Ctrl+P for file search and Ctrl+Shift+P for commands.\n3. Explore Extensions for plugins, and Help for read-only author and contact information.\n\n## Choose your guide\n\n' + '\n'.join(f'- [{title}]({name}.html) — {category}' for name, title, category in PAGES[1:]) + '\n\n## Offline by design\n\nOpen this HTML file in a browser. No server, account, CDN, JavaScript framework, analytics, or network request is needed to read the documentation. Search works locally when JavaScript is enabled. External reference links require internet access.\n\n## Verification scope\n\nThe editor and GUI tests were exercised on Linux. Windows/macOS runtime behavior remains unverified. AI integration tests use offline transports; they do not prove provider availability, account access, pricing, or live response quality.\n', ROOT / 'README.md'),
         'editor': ('# Using Pocket Editor\n\n' + sections(readme, editor_sections), ROOT / 'README.md'),
         'terminal': ('# Project Terminal\n\nRun commands from a chosen directory using the operating system’s shell. This is an output-only runner: interactive shells, password prompts, full-screen terminal programs, and input forwarding are unsupported. Use Run, Stop, Save Project Command, and Settings. The default directory comes from the project, then the active file, then the current working directory.\n\n' + sections(readme, terminal_sections), ROOT / 'README.md'),
+        'gui': ((ROOT / 'docs/GUI.md').read_text(encoding='utf-8'), ROOT / 'docs/GUI.md'),
         'codex': ((ROOT / 'docs/CODEX.md').read_text(encoding='utf-8'), ROOT / 'docs/CODEX.md'),
         'loading': ((ROOT / 'docs/LOADING.md').read_text(encoding='utf-8'), ROOT / 'docs/LOADING.md'),
         'ai': ((ROOT / 'docs/AI_ASSISTANT.md').read_text(encoding='utf-8'), ROOT / 'docs/AI_ASSISTANT.md'),
