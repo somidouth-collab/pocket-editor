@@ -56,14 +56,12 @@ class EditorSession:
         active = 0
         for document in editor.documents:
             path = document['path']
-            if clean and path is None:
-                continue
             text = document['widget']
             if document is editor.active_document:
                 active = len(entries)
             item = {'path': str(path) if path else None, 'cursor': text.index('insert'),
                     'view': text.yview()[0], 'newline': document['newline'], 'bom': document['bom']}
-            if not clean and (text.edit_modified() or document['rich_dirty'] or path is None):
+            if text.edit_modified() or document['rich_dirty'] or path is None:
                 item.update(text=text.get('1.0', 'end-1c'), dirty=bool(text.edit_modified()),
                             rich_dirty=document['rich_dirty'], styles=[])
                 for tag in text.tag_names():
@@ -75,7 +73,13 @@ class EditorSession:
                         options['font_spec'] = font.Font(root=editor.root, font=options.pop('font')).actual()
                     item['styles'].append({'style': options, 'ranges': ranges})
             entries.append(item)
-        return {'version': 1, 'clean': clean, 'active': active, 'documents': entries}
+        workspace={'geometry':editor.root.geometry()}
+        try:workspace['explorer']=editor.plugin_apis['project_explorer'].call_service('project_explorer.get_state')
+        except (KeyError,LookupError):pass
+        split=getattr(editor,'split_editor',None)
+        if split and split.enabled:
+            workspace['split']={'documents':[next((i for i,d in enumerate(editor.documents) if d is item),None) for item in split.documents], 'active_side':split.active_side}
+        return {'version':1,'clean':clean,'active':active,'documents':entries,'workspace':workspace}
 
     def write(self, clean=False):
         try:
@@ -116,7 +120,7 @@ class EditorSession:
                 if len(ranges) % 2 or not all(isinstance(index, str) for index in ranges):
                     raise ValueError('Invalid formatting ranges')
         recover = any('text' in item for item in entries)
-        if recover:
+        if recover and not data.get('clean'):
             recover = messagebox.askyesno('Recover unsaved documents',
                 'The previous session contains unsaved drafts. Recover them?\nFiles on disk will not change until you save.', parent=self.editor.root)
         restored = {}
@@ -157,6 +161,22 @@ class EditorSession:
             except (ValueError, TypeError, tk.TclError):
                 editor.buffer.mark_set('insert', '1.0')
             editor.refresh()
+        workspace=data.get('workspace',{})
+        if isinstance(workspace,dict):
+            geometry=workspace.get('geometry')
+            if isinstance(geometry,str):
+                import re
+                if re.fullmatch(r'\d+x\d+(?:[+-]\d+){0,2}',geometry):editor.root.geometry(geometry)
+            try:
+                if workspace.get('explorer'):editor.plugin_apis['project_explorer'].call_service('project_explorer.restore_state',workspace['explorer'])
+            except (KeyError,LookupError,OSError,ValueError):pass
+            split=workspace.get('split')
+            if isinstance(split,dict) and isinstance(split.get('documents'),list) and len(split['documents'])==2:
+                pair=[restored.get(index) for index in split['documents'] if isinstance(index,int)]
+                if len(pair)==2 and pair[0] is not pair[1] and all(item is not None for item in pair):
+                    editor.split_editor.enable();editor.split_editor.documents=pair
+                    editor.split_editor.active_side=1 if split.get('active_side')==1 else 0
+                    editor.split_editor.layout()
         if data.get('active') in restored:
             editor.select_document(restored[data['active']])
         if skipped:
@@ -166,8 +186,11 @@ class EditorSession:
         if self.job:
             self.editor.root.after_cancel(self.job)
             self.job = None
-        self.write(clean=True)
+        if not self.write(clean=True):
+            self.job=self.editor.root.after(5000,self.checkpoint)
+            return False
         self.release()
+        return True
 
     def release(self):
         if self.lock:

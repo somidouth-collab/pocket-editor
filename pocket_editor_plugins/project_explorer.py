@@ -1,4 +1,5 @@
 """Pocket Editor project tree. File operations require explicit user actions."""
+from pocket_editor_plugins._explorer_icons import IconButton
 import json
 import os
 import shutil
@@ -35,6 +36,15 @@ def register(api):
     file_icon.put('#71869a',to=(4,1,13,15));file_icon.put('#11161c',to=(5,2,12,14))
 
     visible = False
+    menu = None
+    refresh_pending = False
+    state_path = editor.settings_path.with_name('project_explorer_settings.json')
+    last_state = None
+    try:
+        candidate=json.loads(state_path.read_text(encoding='utf-8'))
+        if isinstance(candidate,dict):last_state=candidate
+    except (OSError,ValueError):pass
+
     sidebar = ttk.Frame(editor.workspace, padding=(14, 14), width=260)
     sidebar._tree_icons = (folder_icon,file_icon)
     header = ttk.Frame(sidebar)
@@ -105,6 +115,10 @@ def register(api):
             add_node(item, child)
 
     def refresh():
+        nonlocal refresh_pending
+        if menu is not None and menu.winfo_ismapped():
+            refresh_pending=True
+            return
         paths.clear()
         for item in tree.get_children():
             tree.delete(item)
@@ -115,21 +129,23 @@ def register(api):
         populate(item)
         tree.selection_set(item)
 
-    def activate_project(directory, filename=None):
+    def activate_project(directory, filename=None, reveal=True, persist=True):
         nonlocal project, project_file
         directory = Path(directory).resolve()
         if not directory.is_dir():
             raise ValueError(f"Project folder does not exist: {directory}")
         # Check access before replacing the current project.
         list(directory.iterdir())
+        if menu is not None and menu.winfo_ismapped():menu.unpost()
         project, project_file = directory, filename
         heading.configure(text=project.name or str(project))
         refresh()
-        if hasattr(editor, "plugin_sidebar"):
+        if reveal and hasattr(editor, "plugin_sidebar"):
             editor.plugin_sidebar.open(api.plugin_id)
-        elif not visible:
+        elif reveal and not visible:
             toggle()
         notify(str(project))
+        if persist:save_state()
         if hasattr(api, "emit"):
             api.emit("project_changed", action="opened", path=str(project))
 
@@ -236,8 +252,14 @@ def register(api):
 
     def open_selected(_event=None):
         path = selected()
-        if path is None or path.is_dir():
-            return
+        if path is None: return
+        if path.is_dir():
+            item = tree.focus()
+            if item:
+                opened = bool(tree.item(item, 'open'))
+                if not opened: populate(item)
+                tree.item(item, open=not opened)
+            return "break"
         editor.open_path(path)
         notify(f"Opened {path.name}")
         if hasattr(api, "emit"):
@@ -318,6 +340,60 @@ def register(api):
         if hasattr(api, "emit"):
             api.emit("project_changed", action="deleted", path=str(path))
 
+    def get_state():
+        if project is None:return {}
+        expanded=[]
+        for item,path in paths.items():
+            if tree.exists(item) and tree.item(item,'open'):
+                try:expanded.append(path.relative_to(project).as_posix())
+                except ValueError:pass
+                if len(expanded)>=500:break
+        path=selected()
+        return {'project':str(project),'project_file':str(project_file) if project_file else None,
+                'expanded':expanded,'selected':path.relative_to(project).as_posix() if path else None,
+                'view':tree.yview()[0]}
+
+    def save_state():
+        state=get_state()
+        if state:
+            try:editor.write_data(state_path,json.dumps(state,ensure_ascii=False).encode('utf-8'))
+            except OSError as error:notify('Could not save Explorer state: '+str(error))
+
+    def restore_state(state, reveal=False):
+        if not isinstance(state,dict) or not isinstance(state.get('project'),str):return False
+        directory=Path(state['project']).expanduser().resolve()
+        if not directory.is_dir():
+            notify('Last project is unavailable: '+str(directory));return False
+        filename=state.get('project_file')
+        filename=Path(filename) if isinstance(filename,str) and Path(filename).is_file() else None
+        if directory!=project:activate_project(directory,filename,reveal=reveal,persist=False)
+        expanded=state.get('expanded',[])
+        if not isinstance(expanded,list):expanded=[]
+        for relative in sorted((s for s in expanded[:500] if isinstance(s,str)),key=lambda s:len(Path(s).parts)):
+            rel=Path(relative)
+            if rel.is_absolute() or '..' in rel.parts:continue
+            path=project/rel
+            item=next((item for item,value in paths.items() if value==path),None)
+            if item and path.is_dir() and not path.is_symlink():
+                if not tree.item(item,'open'):populate(item)
+                tree.item(item,open=True)
+        selection=state.get('selected')
+        if isinstance(selection,str):
+            rel=Path(selection)
+            if not rel.is_absolute() and '..' not in rel.parts:
+                item=next((item for item,value in paths.items() if value==project/rel),None)
+                if item:tree.selection_set(item);tree.focus(item)
+        try:tree.yview_moveto(max(0,min(1,float(state.get('view',0)))))
+        except (TypeError,ValueError):pass
+        return True
+
+    restored=False
+    def restore_last_project(**payload):
+        nonlocal restored
+        if not restored:
+            restored=True
+            if last_state:restore_state(last_state)
+
     def project_tool(service):
         if project is None:
             choose_project()
@@ -334,43 +410,100 @@ def register(api):
                            ("Save Project As…", lambda: save_project(True)),
                            ("Git Project…", lambda: project_tool("git_project.open_project")),
                            ("Team Project…", lambda: project_tool("team_project.open_project")),
-                           ("Open File", open_selected), ("New File…", create),
+                           ("Open", open_selected), ("New File…", create),
                            ("New Folder…", lambda: create(True)), ("Rename…", rename),
                            ("Delete…", delete), ("Refresh", refresh)):
         menu.add_command(label=label, command=command)
 
+    def copy_path():
+        path = selected()
+        if path is not None:
+            root.clipboard_clear();root.clipboard_append(str(path))
+    menu.add_command(label='Copy Path',command=copy_path)
+
+    def update_menu():
+        path = selected()
+        for label,enabled in [('Open',path is not None),
+                              ('New File…',project is not None),('New Folder…',project is not None),
+                              ('Rename…',path is not None and path != project),
+                              ('Delete…',path is not None and path != project),
+                              ('Copy Path',path is not None)]:
+            menu.entryconfigure(label,state='normal' if enabled else 'disabled')
+
+    def popup(x,y):
+        update_menu()
+        try:menu.tk_popup(x+3,y+3)
+        except tk.TclError:
+            menu.grab_release()
+            raise
+
+    def menu_closed(event=None):
+        nonlocal refresh_pending
+        try:menu.grab_release()
+        except tk.TclError:pass
+        if refresh_pending:
+            refresh_pending=False
+            root.after_idle(refresh)
+    menu.bind('<Unmap>',menu_closed)
+
     def context(event):
         item = tree.identify_row(event.y)
         if item:
-            tree.selection_set(item)
-            tree.focus(item)
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+            tree.selection_set(item);tree.focus(item)
+        else:
+            tree.selection_remove(tree.selection());tree.focus('')
+        popup(event.x_root,event.y_root)
+        return 'break'
 
-    for column, (label, command) in enumerate((
-            ("Open", choose_project), ("Save", save_project), ("Load", load_project))):
-        controls.columnconfigure(column, weight=1, uniform="project_actions")
-        ttk.Button(controls, text=label, width=6, command=command).grid(
-            row=0, column=column, sticky="ew", padx=(0 if column == 0 else 4, 0))
-    ttk.Button(tools, text="Actions ▾", command=lambda: menu.tk_popup(
-        tools.winfo_rootx(), tools.winfo_rooty() + tools.winfo_height())).pack(side="right")
+    def keyboard_context(event=None):
+        item = tree.focus()
+        if item:tree.selection_set(item)
+        box=tree.bbox(item) if item else ()
+        popup(tree.winfo_rootx()+20,tree.winfo_rooty()+(box[1]+box[3] if box else 20))
+        return 'break'
+
+    def actions():
+        popup(controls.winfo_rootx(),controls.winfo_rooty()+controls.winfo_height())
+
+    tools.pack_forget()
+    for action,label,command in [
+        ('open','Open project folder',choose_project),('save','Save project',save_project),
+        ('load','Load project',load_project),('new_file','New file',create),
+        ('new_folder','New folder',lambda:create(True)),('refresh','Refresh tree',refresh),
+        ('more','More project and item actions',actions)]:
+        IconButton(controls,action,label,command).pack(side='left',padx=(0,4))
     tree.bind("<<TreeviewOpen>>", lambda event: populate(tree.focus()))
     tree.bind("<Double-1>", open_selected)
     tree.bind("<Return>", open_selected)
-    tree.bind("<Button-3>", context)
+    def select_context_target(event):
+        item=tree.identify_row(event.y)
+        if item:tree.selection_set(item);tree.focus(item)
+        else:tree.selection_remove(tree.selection());tree.focus('')
+        return 'break'
+    tree.bind("<Button-3>", select_context_target)
+    tree.bind("<ButtonRelease-3>", context)
+    tree.bind("<Control-Button-1>", select_context_target)
+    tree.bind("<Control-ButtonRelease-1>", context)
+    tree.bind("<Shift-F10>", keyboard_context)
+    tree.bind("<Menu>", keyboard_context)
     tree.bind("<F2>", lambda event: rename())
     if hasattr(api, "provide_service"):
         api.provide_service("get_project", lambda: project)
+        api.provide_service("get_state",get_state)
+        api.provide_service("restore_state",restore_state)
+        api.on("plugins_loaded",lambda **payload:restore_last_project())
         api.provide_service("open_project", activate_project)
         api.on("project_changed", lambda source, **payload: refresh()
                if source != api.plugin_id else None)
     def mount(parent):
+        header.pack_forget()
         sidebar.pack(in_=parent, fill="both", expand=True)
         return sidebar
     api.add_panel(mount, width=320)
-    api.on_cleanup(sidebar.destroy)
+    def cleanup():
+        save_state()
+        sidebar.destroy()
+    api.on_cleanup(cleanup)
     api.add_command("Project Explorer", toggle)
     api.add_command("Open Project", choose_project)
     api.add_command("Load Project", load_project)

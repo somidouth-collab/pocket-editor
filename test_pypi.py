@@ -19,6 +19,7 @@ class PyPITests(unittest.TestCase):
             stage = stage_project(Path(temp) / "source")
             payload = stage / "pocket_editor_app/_payload"
             for name in ["pocket_editor.py", "plugin_sidebar.py", "docs/GUI.md", "pocket_editor_plugins/_docking.py", "docs/index.html", "docs/CODEX.md", "docs/LOADING.md",
+                         "pocket_editor_plugins/cpp_tools.py", "pocket_editor_plugins/_cpp_language.py", "pocket_editor_plugins/_cpp_debug.py", "docs/C_CPP.md", "examples/cpp/main.cpp",
                          "pocket_editor_plugins/codex_assistant.py", "pocket_editor_plugins/loading_indicator.py", "pocket_editor_plugins/ai_assistant.py",
                          "tools/php/package-lock.json", "pocket_editor_plugins/team_project.py"]:
                 self.assertTrue((payload / name).is_file(), name)

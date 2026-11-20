@@ -104,9 +104,13 @@ class ChatWorker:
                             result = copy.pull() if kind == 'pull_project' else copy.publish()
                             self.emit('synced', ('pull' if kind == 'pull_project' else 'publish', result))
                         elif kind == 'invite':
-                            self.emit('invited', client.json_request('/clients', data=json.dumps({'name': value}).encode()))
+                            self.emit('invited', client.json_request('/clients', data=json.dumps(value if isinstance(value, dict) else {'name': value}).encode()))
                         elif kind == 'clients':
                             self.emit('clients', client.json_request('/clients')['clients'])
+                        elif kind == 'delete_client':
+                            client.json_request('/clients', data=json.dumps({'delete': value}).encode())
+                            self.emit('clients', client.json_request('/clients')['clients'])
+                            self.emit('client_deleted', value)
                         elif kind == 'revoke':
                             client.json_request('/clients', data=json.dumps({'revoke': value}).encode())
                             self.emit('clients', client.json_request('/clients')['clients'])
@@ -336,8 +340,8 @@ class ChatPane(ttk.Frame):
         self.keys_button.pack(anchor='w', pady=4)
         self.internet_setup_button = ttk.Button(copy_tab, text='Easy Internet Setup…', command=self.show_relay)
         self.internet_setup_button.pack(anchor='w', pady=4)
-        ttk.Label(copy_tab, text='Close project tabs before syncing. Conflicting edits stay in your local copy.\n'
-                  'All joined clients can read shared files and send changes. The host manages deletions.',
+        ttk.Label(copy_tab, text='Close project tabs before syncing. Conflicting edits stay local and receive a separate recovery backup.\n'
+                  'Your invitation controls access and allowed folders. The host manages deletions.',
                   wraplength=650, style='Muted.TLabel').pack(anchor='w', pady=(14, 0))
         self.apply_role()
         self.update_controls()
@@ -360,6 +364,8 @@ class ChatPane(ttk.Frame):
         self.internet_setup_button.configure(state='normal' if self.role.get() == 'Host' else 'disabled')
         for button in (self.send_button, self.attach_button, self.download_button, self.pull_button, self.publish_button):
             button.configure(state='normal' if self.connected and not self.transferring else 'disabled')
+        if self.session_info.get('role') == 'read-only':
+            self.attach_button.configure(state='disabled');self.publish_button.configure(state='disabled')
 
     def update_relay_controls(self):
         state = (self.role.get(), self.connected, self.hosting, self.connecting, self.relay.running)
@@ -679,6 +685,13 @@ class ChatPane(ttk.Frame):
         self.client_name = tk.StringVar()
         ttk.Entry(row, textvariable=self.client_name).pack(side='left', fill='x', expand=True)
         ttk.Button(row, text='Generate Client Key', command=self.invite).pack(side='left', padx=(8, 0))
+        access = ttk.Frame(body);access.pack(fill='x', pady=(0, 8))
+        ttk.Label(access, text='Access').pack(side='left')
+        self.client_access = tk.StringVar(value='member')
+        ttk.Combobox(access, textvariable=self.client_access, values=('read-only', 'member', 'admin'), state='readonly', width=12).pack(side='left', padx=8)
+        self.client_folders = tk.StringVar()
+        ttk.Label(body, text='Allowed project folders (comma separated; blank means all)').pack(anchor='w')
+        ttk.Entry(body, textvariable=self.client_folders).pack(fill='x', pady=(0, 8))
         ttk.Label(body, text='Client-facing server URL (LAN/VPN IP or HTTPS address)').pack(anchor='w')
         self.invite_address = tk.StringVar(value=self.suggested_address or ('' if '127.0.0.1' in self.address.get() or 'localhost' in self.address.get() else self.address.get()))
         ttk.Entry(body, textvariable=self.invite_address).pack(fill='x', pady=(3, 8))
@@ -716,8 +729,11 @@ class ChatPane(ttk.Frame):
         ttk.Label(body, text='Client source ports are automatic and change; a reverse proxy may appear as the peer IP.',
                   style='Muted.TLabel', wraplength=650).pack(anchor='w', pady=(0, 6))
         self.client_tree.pack(fill='both', expand=True)
-        ttk.Button(body, text='Revoke Selected Key', command=self.revoke).pack(side='bottom', anchor='e', pady=(8, 0), before=self.client_tree)
-        ttk.Button(body, text='Refresh Clients', command=lambda: self.enqueue('clients')).pack(side='bottom', anchor='w', before=self.client_tree)
+        controls = ttk.Frame(body)
+        controls.pack(side='bottom', fill='x', pady=(8, 0), before=self.client_tree)
+        ttk.Button(controls, text='Refresh Clients', command=lambda: self.enqueue('clients')).pack(side='left')
+        ttk.Button(controls, text='Remove Client…', command=self.delete_client).pack(side='right')
+        ttk.Button(controls, text='Revoke Selected Key', command=self.revoke).pack(side='right', padx=8)
         self.update_public_ip_controls()
         self.enqueue('clients')
 
@@ -739,7 +755,8 @@ class ChatPane(ttk.Frame):
         except ValueError as error:
             self.status.set(str(error))
             return
-        self.enqueue('invite', name)
+        folders = [part.strip() for part in self.client_folders.get().split(',') if part.strip()]
+        self.enqueue('invite', {'name': name, 'role': self.client_access.get(), 'folders': folders})
 
     def revoke(self):
         selected = self.client_tree.selection()
@@ -749,6 +766,22 @@ class ChatPane(ttk.Frame):
                 self.last_invite = None
                 self.generated_key.set('')
                 self.export_invite_button.configure(state='disabled')
+
+    def delete_client(self):
+        if not self.connected or not self.admin:
+            return
+        selected = self.client_tree.selection()
+        if not selected:
+            self.status.set('Select a client to remove.');return
+        row = selected[0]
+        ident = self.client_rows.get(row)
+        if ident is None:return
+        name = self.client_tree.item(row, 'values')[0]
+        if not messagebox.askyesno('Remove Client',
+                f'Remove {name} from this team and invalidate their join key?\n\n'
+                'Their downloaded files will remain on their computer. A new invitation is needed to rejoin.',
+                parent=self.key_window):return
+        self.enqueue('delete_client', ident)
 
     def enqueue(self, kind, value=None):
         try:
@@ -948,6 +981,8 @@ class ChatPane(ttk.Frame):
                     self.last_sync = f'{len(paths)} files ' + ('copied from server.' if action == 'pull' else 'sent to server.')
                     if conflicts:
                         self.last_sync += ' Conflicts kept locally: ' + ', '.join(conflicts[:20])
+                        copies = result.get('conflict_copies', {})
+                        if copies:self.last_sync += ' Recovery backups: ' + str(Path(next(iter(copies.values()))).parent)
                     self.project_info.set(self.last_sync)
                     self.status.set(self.last_sync)
                     if self.editor is not None and self.project.get():
@@ -982,6 +1017,13 @@ class ChatPane(ttk.Frame):
                         self.composer.delete('1.0', 'end')
                     self.status.set('Message sent.' if kind == 'sent' else
                                     ('Shared ' if kind == 'uploaded' else 'Saved ') + value)
+                elif kind == 'client_deleted':
+                    if self.last_invite and self.last_invite['id'] == value:
+                        self.last_invite = None
+                        self.generated_key.set('')
+                        if self.key_window is not None and self.key_window.winfo_exists():
+                            self.export_invite_button.configure(state='disabled')
+                    self.status.set('Client removed. Their previous join key is no longer accepted.')
                 elif kind == 'recovered':
                     self.status.set('Reconnected to team chat.')
                 self.update_controls()

@@ -1,4 +1,4 @@
-"""Session persistence, interrupted-session recovery, and clean discard tests."""
+"""Session persistence, clean workspace restore, and interrupted-session recovery tests."""
 import json
 import tkinter as tk
 import unittest
@@ -37,7 +37,7 @@ class SessionTests(unittest.TestCase):
         self.root.update()
         return restored
 
-    def test_clean_tabs_cursor_and_discard(self):
+    def test_clean_close_preserves_all_tabs_and_drafts(self):
         first = core.PLUGIN_DIR / 'one.txt'; first.write_text('disk one\nsecond')
         second = core.PLUGIN_DIR / 'two.txt'; second.write_text('disk two')
         session = self.session(); self.assertTrue(session.start())
@@ -51,13 +51,15 @@ class SessionTests(unittest.TestCase):
         self.editor.quit()
         data = json.loads(session.path.read_text())
         self.assertTrue(data['clean'])
-        self.assertEqual(len(data['documents']), 2)
-        self.assertFalse(any('text' in item for item in data['documents']))
+        self.assertEqual(len(data['documents']), 3)
+        self.assertEqual(sum('text' in item for item in data['documents']), 2)
         self.assertEqual(second.read_text(), 'disk two')
         # Quit already destroyed this root; create a fresh editor for restore.
         self.root = tk.Tk(); self.editor = core.Editor(self.root, False); self.root.update()
         restored = self.session(); self.assertTrue(restored.start()); self.root.update()
-        self.assertEqual(len(self.editor.documents), 2)
+        self.assertEqual(len(self.editor.documents), 3)
+        self.assertEqual(self.editor.documents[1]['widget'].get('1.0','end-1c'),'disk two discarded')
+        self.assertEqual(self.editor.documents[2]['widget'].get('1.0','end-1c'),'discarded untitled')
         self.assertEqual(self.editor.path, first)
         self.assertEqual(self.editor.buffer.index('insert'), '2.3')
 
@@ -102,11 +104,11 @@ class SessionTests(unittest.TestCase):
             replacement = self.session(); self.assertTrue(replacement.start())
         self.assertEqual(replacement.path.with_suffix('.invalid.json').read_text(), '{broken')
 
-    def test_canceled_quit_retains_recovery(self):
+    def test_failed_backup_keeps_editor_open_and_retains_lock(self):
         session = self.session(); self.assertTrue(session.start())
         self.editor.buffer.insert('1.0', 'retain')
         session.write()
-        with patch.object(core.messagebox, 'askyesnocancel', return_value=None):
+        with patch.object(session,'write',return_value=False), patch.object(core.messagebox,'showerror'):
             self.editor.quit()
         self.assertFalse(self.editor.closing)
         self.assertFalse(json.loads(session.path.read_text())['clean'])

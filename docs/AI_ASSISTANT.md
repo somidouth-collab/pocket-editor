@@ -60,3 +60,11 @@ Offline tests validate request construction, key headers, catalog filtering, his
 - OpenRouter API: https://openrouter.ai/docs/api_reference/overview
 - Groq compatibility: https://console.groq.com/docs/openai
 - DeepSeek API: https://api-docs.deepseek.com/
+
+## Recover from a Gemini model 404
+
+Click **Repair connection** in Settings or below the failed reply. For a named preset it restores the correct API endpoint and refreshes the model catalog once. This is a catalog lookup, not a generation retry. An unavailable selected model is cleared; choose a returned text model and Save settings before sending your preserved prompt again. The plugin never silently chooses another model.
+
+For `gemini-2.5-flash-lite`, a 404 alone does not prove retirement: the model may be unavailable for your key or API version. The status now includes the selected model, API version and a redacted provider message. If it is still listed but generation fails, check your Google project's model access and choose another explicitly. API access cannot be verified by offline tests.
+
+Gemini discovery requests up to 1000 models in one catalog call and uses returned base model IDs. A partial catalog is reported instead of falsely declaring the current model unavailable. See the official [model-list API](https://aistudio.google.com/api-reference/models/list-models).

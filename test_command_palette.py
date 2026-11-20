@@ -60,14 +60,14 @@ class PaletteTests(unittest.TestCase):
         self.editor.plugins.add_command(label='Disabled example', state='disabled', command=lambda: None)
         self.palette.show(); self.root.update()
         self.palette.query.set('test palette plugin')
-        self.assertEqual(len(self.palette.matches), 2)
+        self.assertEqual(len(self.palette.matches), 1)
         self.assertEqual(self.palette.matches[0][0], 'Plugins › Test Palette Plugin')
         self.palette.run(); self.root.update()
         self.assertIsNone(self.palette.window)
         self.assertEqual(self.editor.buffer.get('1.0', 'end-1c'), 'plugin ran')
         self.editor.buffer.edit_undo()
         self.assertEqual(self.editor.buffer.get('1.0', 'end-1c'), '')
-        self.assertFalse(any('Disabled example' in item[0] for item in menu_commands(self.root, self.editor.menu_bar)))
+        self.assertFalse(any('Disabled example' in item[0] for item in self.palette.commands))
 
     def test_menu_toggles_and_safe_mode(self):
         self.palette.show(); self.root.update()
@@ -81,7 +81,7 @@ class PaletteTests(unittest.TestCase):
         self.root.update()
         safe.command_palette.show(); self.root.update()
         self.assertTrue(safe.command_palette.matches)
-        self.assertTrue(all('Plugin Manager' in item[0] for item in safe.command_palette.matches if item[0].startswith('Plugins')))
+        self.assertTrue(all('Plugin Manager' in item[0] for item in safe.command_palette.matches if item[0].startswith('Plugins ›')))
         safe.quit()
 
     def test_shortcut_and_core_new_command(self):

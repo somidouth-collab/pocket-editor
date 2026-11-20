@@ -134,6 +134,20 @@ class AIResponseError(ValueError):
     """Only locally authored, non-secret error descriptions belong here."""
 
 
+def provider_error_detail(error, key):
+    """Read a bounded error message and redact credentials before displaying it."""
+    try:
+        data = json.loads(error.read(8192))
+        detail = data.get('error', {})
+        message = detail.get('message', '') if isinstance(detail, dict) else ''
+        if not isinstance(message, str): return ''
+    except (OSError, ValueError, TypeError, AttributeError):
+        return ''
+    if key: message = message.replace(key, '[redacted]')
+    message = re.sub(r'(?i)(api[_-]?key[=:]\s*|Bearer\s+)\S+', r'\1[redacted]', message)
+    return ' '.join(message.split())[:600]
+
+
 def request_json(config, key, url, payload=None):
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
     if key:
@@ -212,10 +226,12 @@ def send_request(config, key, messages):
 
 def list_models(config, key):
     if config.get('protocol') == 'Google Gemini':
-        data = request_json(config, key, config['endpoint'].rstrip('/') + '/models')
+        data = request_json(config, key, config['endpoint'].rstrip('/') + '/models?pageSize=1000')
         if not isinstance(data.get('models'), list):
             raise AIResponseError('Gemini did not return a model list. Check the key and API base URL, or enter a model ID manually.')
-        return sorted({item['name'].removeprefix('models/') for item in data['models']
+        if data.get('nextPageToken'):
+            raise AIResponseError('Gemini returned a partial catalog. Enter an exact model ID manually; the current selection was not cleared.')
+        return sorted({(item.get('baseModelId') or item['name']).removeprefix('models/') for item in data['models']
                        if isinstance(item, dict) and isinstance(item.get('name'), str)
                        and 'generateContent' in item.get('supportedGenerationMethods', [])})
     endpoint = config['endpoint'].rstrip('/')
@@ -242,6 +258,7 @@ class AIAssistant:
         self.histories = {}
         self.provider_keys = {}
         self.profiles = {}
+        self.catalog_scope, self.catalog_models = None, set()
         self.pending_prompt = None
         self.loading = None
         self.used, self.busy, self.pause_until = 0, False, 0
@@ -327,6 +344,7 @@ class AIAssistant:
         model_controls = ttk.Frame(settings_body); model_controls.pack(fill='x', pady=10)
         self.models_button = ttk.Button(model_controls, text='Refresh models', command=self.refresh_models)
         self.models_button.pack(side='left')
+        ttk.Button(model_controls, text='Repair connection', command=self.repair_connection).pack(side='left', padx=8)
         ttk.Label(model_controls, text='Reasoning (Responses)').pack(side='left', padx=8)
         ttk.Combobox(model_controls, textvariable=self.values['reasoning'], values=('default', 'low', 'medium', 'high'), state='readonly', width=9).pack(side='left')
         limits = ttk.Frame(settings_body); limits.pack(fill='x', pady=10)
@@ -392,6 +410,7 @@ class AIAssistant:
         self.send.pack(side='right')
         self.status = ttk.Label(body, text='Ready · configure your provider in Settings', style='MyAI.Muted.TLabel', wraplength=600)
         self.status.pack(fill='x', pady=(8, 6))
+        self.repair_button = ttk.Button(body, text='Repair connection / choose an available model', command=self.repair_connection)
         self.loading_area = ttk.Frame(body, style='MyAI.TFrame'); self.loading_area.pack(fill='x')
         footer = ttk.Frame(body, style='MyAI.TFrame'); footer.pack(fill='x')
         ttk.Label(footer, text='Enter to send · Shift+Enter for a new line', style='MyAI.Muted.TLabel').pack(side='left')
@@ -528,6 +547,15 @@ class AIAssistant:
         self.status.configure(text='Choose a provider, enter its own API key, then Refresh models. See How to use for Gemini and local Ollama examples.')
         self.update_summary()
 
+    def repair_connection(self):
+        if self.busy: return
+        preset = PRESETS.get(self.provider.get())
+        if preset:
+            self.values['protocol'].set(preset[0])
+            self.values['endpoint'].set(preset[1])
+        self.show_settings()
+        self.refresh_models()
+
     def checked_key(self, config):
         self.endpoint_changed()
         key = self.key.get().strip()
@@ -568,6 +596,7 @@ class AIAssistant:
         self.config, self.busy = config, True
         self.used += 1
         self.send.configure(state='disabled'); self.models_button.configure(state='disabled')
+        self.repair_button.pack_forget()
         self.status.configure(text='Loading model catalog…')
         self.loading = begin(self.api, 'Loading AI models…', parent=self.loading_area)
         threading.Thread(target=self.worker, args=(config, key, None, (config['endpoint'], config['protocol'])), daemon=True).start()
@@ -608,6 +637,8 @@ class AIAssistant:
             return
         try:
             config = self.current_config()
+            if self.catalog_scope == (config['endpoint'], config['protocol']) and config['model'] not in self.catalog_models:
+                raise ValueError('Choose an available model from Refresh models before sending. No request was sent.')
             if self.used >= config['session_requests']:
                 raise ValueError('Session request limit reached. Raise the limit explicitly to send more.')
             if time.monotonic() < self.pause_until:
@@ -653,7 +684,19 @@ class AIAssistant:
                     delay = 30
             message = {400: 'Provider rejected request parameters. Check API format, model ID, token cap, and reasoning support.', 404: 'Model or endpoint not found. Refresh models and check the API URL.', 401: 'API key rejected.', 403: 'Provider denied access to this model.',
                        402: 'Provider credits or quota exhausted.', 429: 'Provider rate or quota limit; check usage/credits and wait before retrying.'}.get(status, f'Provider returned HTTP {status}.')
-            event = dict(ok=False, message=message, pause=delay)
+            if status == 404:
+                detail = provider_error_detail(error, key)
+                label = provider_for(config)
+                if messages is None:
+                    message = label + ' model catalog was not found. Click Repair connection to restore the provider endpoint, or check your custom API URL.'
+                elif config.get('protocol') == 'Google Gemini':
+                    model = config['model'].replace(key, '[redacted]') if key else config['model']
+                    version = urlsplit(config['endpoint']).path.rstrip('/').rsplit('/', 1)[-1]
+                    message = f'Google Gemini could not find model {model!r} for {version}. The model may be unavailable for this key or may not support generateContent. Click Repair connection, then choose a model from the refreshed list. No generation retry was sent.'
+                else:
+                    message = label + ' could not find this model or API route. Click Repair connection and select a model available to your provider account. No generation retry was sent.'
+                if detail: message += '\nProvider detail: ' + detail
+            event = dict(ok=False, message=message, pause=delay, status=status)
         except (URLError, TimeoutError, ConnectionError):
             event = dict(ok=False, message='Could not reach this provider. Check internet access, proxy/firewall, and endpoint. For Ollama, start the local server and pull a model first.', pause=0)
         except AIResponseError as error:
@@ -681,7 +724,18 @@ class AIAssistant:
                 current = (self.values['endpoint'].get().strip(), self.values['protocol'].get())
                 if current == event['identity']:
                     self.model_picker.configure(values=event['models'])
-                    self.status.configure(text=f'{len(event["models"])} models listed · choose a text model compatible with the selected API format')
+                    self.catalog_scope, self.catalog_models = current, set(event['models'])
+                    selected = self.values['model'].get().strip()
+                    if self.values['protocol'].get() == 'Google Gemini': selected = selected.removeprefix('models/')
+                    if selected and selected not in self.catalog_models:
+                        self.values['model'].set('')
+                        self.show_settings(); self.model_picker.focus_set()
+                        text = f'{selected} is not in the available model catalog. Choose a replacement from Model ID; no model was selected or sent automatically.'
+                    elif not event['models']:
+                        text = 'No compatible text-generation models were returned. Check this provider key, API/project access and model permissions.'
+                    else:
+                        text = f'{len(event["models"])} models listed · choose a compatible text model, then Save settings.'
+                    self.status.configure(text=text); self.settings_status.configure(text=text)
                 else:
                     self.status.configure(text='Provider settings changed; refresh models again.')
             elif event['ok']:
@@ -694,6 +748,8 @@ class AIAssistant:
                     self.append('Notice: the provider returned an incomplete reply. Review it before use; check provider restrictions or increase the output cap if needed. No automatic retry was sent.\n\n')
                 self.api.emit('ai_assistant.reply', text=event['reply'], model=event['identity'][1])
             else:
+                if event.get('status') == 404:
+                    self.repair_button.pack(fill='x', after=self.status, pady=(0, 6))
                 self.pause_until = time.monotonic() + event['pause']
                 self.status.configure(text=event['message'])
                 self.append('Notice: ' + event['message'] + '\n\n')

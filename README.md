@@ -24,13 +24,13 @@ On Windows use `py pocket_editor.py`; on macOS use `python3 pocket_editor.py` wi
 
 ## Appearance and preferences
 
-The interface uses a near-black palette inspired by the reference layout, a compact New/Open/Save toolbar, a compact Extensions dropdown and optional toolbar shortcuts, wrapping file tabs with close buttons and unsaved markers, and a detailed status bar. Settings → Preferences changes document font, tabs, line numbers, and wrapping. Document font changes do not alter UI or gutter fonts. Code Theme controls the document color scheme independently of the UI palette.
+The interface uses a near-black palette inspired by the reference layout, a compact New/Open/Save toolbar, a scrollable Plugins menu and vertical plugin tabs, wrapping file tabs with close buttons and unsaved markers, and a detailed status bar. Settings → Preferences changes document font, tabs, line numbers, and wrapping. Document font changes do not alter UI or gutter fonts. Code Theme controls the document color scheme independently of the UI palette.
 
-Extensions → Add to toolbar lets you check only the commands you want as shortcuts. The toolbar starts empty, saves your selections, and stays on one row. Shortcuts that do not fit the window are available in More; all plugin commands remain in Extensions.
+Use **Plugins** in the menu bar or your chosen vertical tabs to open plugin tools. The Plugins window has a fixed size and a vertical scrollbar. Choose a plugin to see its actions; choosing a group does not run a command. Right-click a vertical tab for the same action list.
 
 ## Documents and settings
 
-Open selects one or more files. Each file has its own tab, edits, undo history, cursor, and formatting. Opening the same file again selects its existing tab. New creates another untitled tab. Click × or press Ctrl+W (Cmd+W on macOS) to close the current file; modified files offer Save, Discard, or Cancel. Canceling Save As or a failed save keeps the file open. Save writes the selected file; File → Save All saves edited and untitled files. Quitting checks every open document. Plain-text saving still requires a formatted copy to preserve rich-text styles.
+Open selects one or more files. Each file has its own tab, edits, undo history, cursor, and formatting. Opening the same file again selects its existing tab. New creates another untitled tab. Click × or press Ctrl+W (Cmd+W on macOS) to close the current file; modified files offer Save, Discard, or Cancel. Canceling Save As or a failed save keeps the file open. Save writes the selected file; File → Save All saves edited and untitled files. With session persistence enabled, closing the editor preserves every draft and the workspace; closing an individual tab still checks unsaved changes. Plain-text saving still requires a formatted copy to preserve rich-text styles.
 
 Plain UTF-8 saves retain the detected BOM and newline convention. Mixed newline conventions are normalized on opening. Saves and settings use a temporary sibling file and atomic replacement; existing symlinks are followed.
 
@@ -38,7 +38,7 @@ Use Rich Text → Save Formatted Copy for `.pocket` documents. File → Save wri
 
 ## Plugins
 
-Python files in `pocket_editor_plugins/` define `register(api)`. Plugin IDs are filename stems. Plugins load in filename order and repeated Load New Plugins does not register them twice.
+Python files in `pocket_editor_plugins/` define `register(api)`. Plugin IDs are filename stems. Startup paints the editor first, initializes the loading animation, and registers the remaining plugins in filename order through short GUI-loop steps. Repeated Load New Plugins does not register them twice.
 
 The API supports commands, text access/replacement, paths, events, services, and discovery. `api.list_services()` returns qualified service names. `api.on_cleanup(callback)` registers cleanup for failed registration or editor exit. Event callbacks and service calls execute on the GUI thread. Event payload key `source` is reserved. Plugins are trusted Python code; plugins that access private editor internals must register cleanup for their own side effects.
 
@@ -98,7 +98,7 @@ The latest combined suite passed 29 tests on Debian. Windows/macOS UI, process h
 
 The PHP worker cancels obsolete requests, keeps only the latest waiting task, warms analysis after opening PHP files, and maintains a short-lived bounded exact-result cache. The UI checks document revision and cursor identity rather than copying the full document repeatedly while polling. Suggestions are ranked using prefix/case and LSP ordering. The popup provides scrolling, symbol kind/type, lazily resolved documentation when supported, response timing, and keyboard/page navigation. Escape cancels delayed/in-flight results as well as hiding the popup, so an older request cannot reopen it.
 
-Project indexes live under `tools/php/cache/`, excluded from source control. Concurrent sessions use a temporary workspace if the persistent cache is already locked. POSIX stale PID locks are recovered; read-only cache locations also fall back to temporary storage. No user source files are written by completion. Existing document font and toolbar shortcut preferences are preserved.
+Project indexes live under `tools/php/cache/`, excluded from source control. Concurrent sessions use a temporary workspace if the persistent cache is already locked. POSIX stale PID locks are recovered; read-only cache locations also fall back to temporary storage. No user source files are written by completion. Existing document font and vertical tab preferences are preserved.
 
 For your PHP code: open its folder with **Extensions → Open Project**, open a PHP document, then use **PHP Completion Settings → Add folder…** for libraries outside the project or framework stubs. Select the project's PHP version there. Composer dependencies must already be present. `use`, aliases, inheritance, traits, interfaces, enums, typed return values, PHPDoc array element types, PHPDoc magic methods, built-in functions and external library paths are covered by real-server tests. Highly dynamic `eval`, runtime-generated members, magic without annotations and framework-specific templates are not guaranteed; provide PHPDoc/stubs where needed. This is not a claim of complete support for every PHP program or framework.
 
@@ -118,7 +118,7 @@ Use **Extensions → Plugin Builder…** to preview, create, and load a command,
 
 ## Command palette
 
-Press **Ctrl+Shift+P** (**Cmd+Shift+P** on macOS), or choose **Edit → Command Palette…**. Type words from a command name or menu category, use ↑/↓ to select, and press Enter to run. Escape closes without making changes. Plugin commands and toolbar toggles appear automatically from the live menus; reopen the palette after loading new plugins. Disabled commands are excluded, and the palette works in safe mode.
+Press **Ctrl+Shift+P** (**Cmd+Shift+P** on macOS), or choose **Edit → Command Palette…**. Type words from a command name or menu category, use ↑/↓ to select, and press Enter to run. Escape closes without making changes. Plugin commands appear automatically from the live menus; reopen the palette after loading new plugins. Disabled commands are excluded, and the palette works in safe mode.
 
 The bundled **editor_commands** plugin adds 14 everyday commands: Duplicate Line / Selection, Move Lines Up/Down, Delete Lines, Trim Trailing Whitespace, Go to Line, Copy File/Folder Path, Next/Previous Tab, Close Other Tabs, and Zoom In/Out/Reset. Line commands act on selected lines or the cursor's line and support Undo. Close Other Tabs checks unsaved changes and stops on cancellation or save failure. Zoom changes persist in editor settings. Load New Plugins or restart to enable newly installed commands; they are available from Extensions and the palette.
 
@@ -126,7 +126,7 @@ The bundled **editor_commands** plugin adds 14 everyday commands: Duplicate Line
 
 Normal application launch restores saved file tabs, the active tab, cursor positions, and vertical scroll positions. While the editor is running, a local snapshot is written every five seconds to `pocket_editor_session.json` beside its settings file. After an interrupted session, a prompt offers to restore unsaved text and rich-text styles; original files remain unchanged until you save. Edits made since the last snapshot may be lost. Undo history is retained while switching tabs, but is not restored across application restarts.
 
-Normal closing still asks about unsaved changes. Discarded edits and untitled documents are omitted from the clean session; saved files reopen from disk on the next launch. Missing files are skipped with a notice. Malformed snapshots are backed up as `pocket_editor_session.invalid.json`. A file lock keeps a second editor instance from overwriting the first instance's recovery data; that instance runs without session persistence. The snapshot contains local document contents, including unsaved drafts.
+Normal closing preserves unsaved edits, untitled documents and rich-text styles in the clean workspace snapshot, then restores them automatically on the next launch. Files on disk are changed only by explicit Save. The snapshot also retains the window size, split view and Explorer state. If saving the snapshot fails, the editor stays open. Closing an individual tab still offers Save/Discard/Cancel; `--no-session` retains the legacy exit prompts. Missing files are skipped with a notice. Malformed snapshots are backed up as `pocket_editor_session.invalid.json`. A file lock keeps a second editor instance from overwriting the first instance's recovery data; that instance runs without session persistence. The snapshot contains local document contents, including unsaved drafts.
 
 Use `python3 -B pocket_editor.py --no-session` to launch without restoring or writing a session. A file supplied on the command line opens after session restoration. Run `python3 -B -m unittest -v test_editor_session` for the persistence and recovery checks.
 
@@ -160,7 +160,7 @@ Other plugins can request an asynchronous check through `api.call_service("pytho
 
 Choose Extensions → Load New Plugins or restart to enable it. Verify with `python3 -B -m unittest -v test_syntax_diagnostics`.
 
-The Extensions toolbar dropdown groups commands by plugin to keep the menu compact. Add to toolbar uses the same plugin groups and shared checkmarks as the menubar. Plugins with more than 18 commands continue under More… rather than producing an oversized menu. Search Commands opens the command palette for direct access to every command. The menubar's Plugins menu remains available.
+The Plugins menu groups commands in a fixed-size window with vertical scrolling. Use the command palette to search all plugin actions.
 
 ## Split editor
 
@@ -275,3 +275,11 @@ Codex, AI and Git display a reusable animated orbit during work. Other plugins c
 ## Vertical plugin tabs and docked tools
 
 Use **Settings → Vertical plugin tabs…** or the rail gear to choose your plugins. Choices persist. Click a tab to open/collapse its panel and drag the divider to resize. Explorer, AI, Codex, Git, Terminal, and Team Project support docking; other plugins show explicit command buttons. Plugin dialogs share the new dark styling. See the [interface and panel guide](docs/GUI.md).
+
+## Local startup and Explorer fixes
+
+Explorer menus open on mouse release and remain posted until an explicit action or dismissal. Tree refreshes are deferred while a menu is open so item targets remain stable. The last project, expanded folders, selected item and scroll position are stored in private workspace settings. The editor appears before incremental plugin registration; the shared animation shows progress and workspace restoration begins only after plugin services are ready.
+
+## C/C++ formatting, completion, syntax checks, and debugging
+
+**C/C++ Tools** combines clang-format formatting, clangd autocomplete, compiler syntax checks with red zigzag underlines, and GDB debugging. Open it from Plugins or pin its vertical tab. On Debian install `clang-format clangd gdb build-essential`, then use C/C++ Settings → Detect tools → Save Settings. See the [C/C++ guide](docs/C_CPP.md) for setup, project compilation databases, debugger controls, and current limits.

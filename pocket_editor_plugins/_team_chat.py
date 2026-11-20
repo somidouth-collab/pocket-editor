@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 
-from pocket_editor_plugins._team_project_sync import ProjectStore, ConflictError
+from pocket_editor_plugins._team_project_sync import ProjectStore, ConflictError, shared_path
 
 MAX_FILE = 50 * 1024 * 1024
 MAX_JSON = 64 * 1024
@@ -52,6 +52,10 @@ class ChatStore:
                        'created REAL, file_id TEXT, name TEXT, size INTEGER, sha256 TEXT)')
             db.execute('CREATE INDEX IF NOT EXISTS room_id ON messages(room, id)')
             db.execute('CREATE TABLE IF NOT EXISTS client_keys (id INTEGER PRIMARY KEY, digest TEXT UNIQUE, name TEXT, room TEXT, revoked INTEGER DEFAULT 0)')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(client_keys)')}
+            if 'role' not in columns:db.execute("ALTER TABLE client_keys ADD COLUMN role TEXT DEFAULT 'member'")
+            if 'deleted' not in columns:db.execute('ALTER TABLE client_keys ADD COLUMN deleted INTEGER DEFAULT 0')
+            if 'folders' not in columns:db.execute("ALTER TABLE client_keys ADD COLUMN folders TEXT DEFAULT '[]'")
 
     @contextmanager
     def connect(self):
@@ -123,27 +127,43 @@ class ChatStore:
         return self.files / file_id, row[0], row[1]
 
 
-    def invite(self, name, room):
+    def invite(self, name, room, role="member", folders=None):
         name, room = field(name, 'client name', 80), field(room, 'room', 100)
+        if role not in ('read-only', 'member', 'admin'):
+            raise ValueError('Choose read-only, member, or admin access.')
+        folders = [] if folders is None else folders
+        if not isinstance(folders, list) or len(folders) > 20:
+            raise ValueError('Choose at most 20 allowed project folders.')
+        for folder in folders:shared_path(folder)
+        if role == 'admin' and folders:
+            raise ValueError('Admin access cannot be limited to folders. Choose member or read-only.')
+        folders = list(dict.fromkeys(folders))
         key = secrets.token_urlsafe(32)
         hashed = hashlib.sha256(key.encode()).hexdigest()
         with self.lock, self.connect() as db:
-            cursor = db.execute('INSERT INTO client_keys(digest,name,room) VALUES (?,?,?)', (hashed, name, room))
-            return {'id': cursor.lastrowid, 'name': name, 'key': key, 'room': room}
+            cursor = db.execute('INSERT INTO client_keys(digest,name,room,role,folders) VALUES (?,?,?,?,?)',
+                                (hashed, name, room, role, json.dumps(folders)))
+            return {'id': cursor.lastrowid, 'name': name, 'key': key, 'room': room, 'role': role, 'folders': folders}
 
     def clients(self):
         with self.connect() as db:
             db.row_factory = sqlite3.Row
-            return [dict(row) for row in db.execute('SELECT id,name,room,revoked FROM client_keys ORDER BY id')]
+            return [dict(row) for row in db.execute('SELECT id,name,room,revoked,role,folders FROM client_keys WHERE deleted=0 ORDER BY id')]
 
     def revoke(self, ident):
         with self.lock, self.connect() as db:
             db.execute('UPDATE client_keys SET revoked=1 WHERE id=?', (int(ident),))
 
+    def delete_client(self, ident):
+        # Keep an ID tombstone so an old client ID cannot be reused for a new key.
+        with self.lock, self.connect() as db:
+            cursor = db.execute('UPDATE client_keys SET revoked=1,deleted=1 WHERE id=? AND deleted=0', (int(ident),))
+            if not cursor.rowcount:raise ValueError('Client no longer exists. Refresh the client list.')
+
     def identify(self, key):
         hashed = hashlib.sha256(key.encode()).hexdigest()
         with self.connect() as db:
-            return db.execute('SELECT name,room,id FROM client_keys WHERE digest=? AND revoked=0', (hashed,)).fetchone()
+            return db.execute('SELECT name,room,id,role,folders FROM client_keys WHERE digest=? AND revoked=0', (hashed,)).fetchone()
 
 
 class ChatServer:
@@ -180,6 +200,9 @@ class ChatServer:
                 if not admin and identity is None:
                     self.json_reply(401, {'error': 'Incorrect or revoked client join key.'})
                     return
+                if identity and identity[3] == 'admin':admin = True
+                prefixes = json.loads(identity[4]) if identity else []
+                read_only = bool(identity and identity[3] == 'read-only')
                 parsed = urlsplit(self.path)
                 query = parse_qs(parsed.query)
                 get = lambda key: query.get(key, [''])[0]
@@ -195,7 +218,8 @@ class ChatServer:
                     if parsed.path == '/session' and method == 'GET':
                         self.json_reply(200, {'admin': admin, 'project': project_store is not None,
                                               'peer_ip': self.client_address[0], 'peer_port': self.client_address[1],
-                                              'listen_ip': self.server.server_address[0], 'listen_port': self.server.server_address[1]})
+                                              'listen_ip': self.server.server_address[0], 'listen_port': self.server.server_address[1],
+                                              'role': identity[3] if identity else 'admin', 'folders': prefixes})
                     elif parsed.path == '/clients':
                         if not admin:
                             self.json_reply(403, {'error': 'Only the host can manage client keys.'})
@@ -211,17 +235,40 @@ class ChatServer:
                             if not 0 < length <= MAX_JSON:
                                 raise ValueError('Invalid client request.')
                             data = json.loads(self.rfile.read(length))
-                            if data.get('revoke') is not None:
+                            if not isinstance(data, dict):raise ValueError('Invalid client request.')
+                            if data.get('delete') is not None:
+                                store.delete_client(data['delete'])
+                                with peers_lock:peers.pop(int(data['delete']), None)
+                                self.json_reply(200, {'deleted': True})
+                            elif data.get('revoke') is not None:
                                 store.revoke(data['revoke'])
                                 self.json_reply(200, {'revoked': True})
                             else:
-                                self.json_reply(201, store.invite(data.get('name'), room))
+                                self.json_reply(201, store.invite(data.get('name'), room, data.get('role', 'member'), data.get('folders')))
                     elif parsed.path.startswith('/project/'):
                         if room != project_room:
                             self.json_reply(403, {'error': 'This room does not share the host project.'})
                             return
-                        if parsed.path == '/project/manifest' and method == 'GET':
-                            self.json_reply(200, project_store.manifest() if project_store else {'available': False})
+                        if parsed.path != '/project/manifest' and prefixes and not any(
+                                get('path') == prefix or get('path').startswith(prefix + '/') for prefix in prefixes):
+                            self.json_reply(403, {'error': 'This invitation cannot access that project folder.'})
+                            return
+                        if method == 'POST' and parsed.path != '/project/manifest' and read_only:
+                            self.json_reply(403, {'error': 'This invitation has read-only project access.'})
+                            return
+                        if parsed.path == '/project/manifest' and method in ('GET', 'POST'):
+                            known = None;project_id = None
+                            if method == 'POST':
+                                length = int(self.headers.get('Content-Length', '-1'))
+                                if not 0 < length <= 2 * 1024 * 1024:
+                                    raise ValueError('Invalid manifest request size.')
+                                raw = self.rfile.read(length)
+                                if len(raw) != length:raise ValueError('Incomplete manifest request.')
+                                payload = json.loads(raw)
+                                if not isinstance(payload, dict):raise ValueError('Invalid manifest request.')
+                                known = payload.get('files');project_id = payload.get('project_id')
+                                if not isinstance(known, dict):raise ValueError('Invalid client manifest.')
+                            self.json_reply(200, project_store.manifest(known, project_id, prefixes=prefixes) if project_store else {'available': False})
                         elif project_store is None:
                             raise ValueError('The host has not selected a project folder.')
                         elif parsed.path == '/project/file' and method == 'GET':
@@ -241,7 +288,14 @@ class ChatServer:
                             expected = get('base')
                             if expected != '-' and not re.fullmatch(r'[0-9a-f]{64}', expected):
                                 raise ValueError('A project revision is required.')
-                            self.json_reply(200, project_store.write(get('path'), None if expected == '-' else expected, data))
+                            version = int(get('version')) if get('version') else None
+                            self.json_reply(200, project_store.write(get('path'), None if expected == '-' else expected, data,
+                                                                   version=version, author=author or 'Host'))
+                        elif parsed.path == '/project/history' and method == 'GET':
+                            if not admin:
+                                self.json_reply(403, {'error': 'Only the host can inspect project history.'})
+                                return
+                            self.json_reply(200, {'history': project_store.history(get('path'))})
                         else:
                             self.json_reply(404, {'error': 'Unknown project endpoint.'})
                     elif method == 'GET' and parsed.path == '/messages':
@@ -256,6 +310,9 @@ class ChatServer:
                         ident = store.post(room, identity[0] if identity else data.get('author'), data.get('text'))
                         self.json_reply(201, {'id': ident})
                     elif method == 'POST' and parsed.path == '/files':
+                        if read_only:
+                            self.json_reply(403, {'error': 'This invitation has read-only attachment access.'})
+                            return
                         ident = store.upload(room, author, get('name'), self.rfile,
                                              int(self.headers.get('Content-Length', '-1')))
                         self.json_reply(201, {'id': ident})

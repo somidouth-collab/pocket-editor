@@ -2,12 +2,12 @@
 
 ## Start with Plugin Builder
 
-1. Open Extensions → Plugin Builder… (restart the editor or choose Extensions → Load New Plugins if the builder is newly installed).
+1. Open Plugins → Plugin Builder… (restart the editor or choose Plugins → Load New Plugins if the builder is newly installed).
 2. Enter a unique plugin ID such as `my_tools`, a command label, and an optional description.
 3. Choose Simple command, Text transform, Tool window, or Events and services.
 4. Review Code preview. Previewing validates and compiles the generated source without running it.
 5. Click Create & load. The builder creates `pocket_editor_plugins/<plugin_id>.py`, loads it, and opens its source in a file tab. Existing files are never overwritten.
-6. Run your command from Extensions. Add a shortcut button through Extensions → Add to toolbar.
+6. Run your command from Plugins. Choose vertical tabs through Settings → Vertical plugin tabs….
 7. Edit the source and save it. Restart the editor to apply changes to a plugin already loaded. Load New Plugins loads only files not already loaded; it does not reload edited plugins.
 
 The builder needs only Python and Tkinter. Templates are starting points, not a package installer or an AI code generator.
@@ -85,7 +85,7 @@ def register(api):
     api.add_command("Use another plugin", show_count)
 ```
 
-Service calls are synchronous. Keep them short and handle failures at the caller. There is no manifest, automatic dependency installation, or dependency-order resolver; plugin files load in filename order.
+Service calls are synchronous. Keep them short and handle failures at the caller. There is no manifest, automatic dependency installation, or dependency-order resolver; the loading-indicator utility initializes first and the other plugin files load in filename order. Startup yields to Tk between registrations; all Tk work remains on the GUI thread. Use `api.on("plugins_loaded", callback)` for work that needs the complete service registry.
 
 ## Two plugins communicating
 
@@ -116,7 +116,7 @@ def register(api):
     api.add_command("Show shared word count", show_count)
 ```
 
-Choose Extensions → Load New Plugins. Run counter's command to send an event to `counter_view`; run Show shared word count to request counter's service. Both use the active file tab. Events carry notifications; services return requested values. Plugins need no direct Python imports of one another. Calls belong in command callbacks rather than module-level code, because the other plugin may still be loading.
+Choose Plugins → Load New Plugins. Run counter's command to send an event to `counter_view`; run Show shared word count to request counter's service. Both use the active file tab. Events carry notifications; services return requested values. Plugins need no direct Python imports of one another. Calls belong in command callbacks rather than module-level code, because the other plugin may still be loading.
 
 ## GUI tools and cleanup
 
@@ -169,3 +169,5 @@ Use the GUI-thread services `loading_indicator.start(message="Working…")`, `lo
 ## Docked panels and vertical tabs
 
 Call `api.add_panel(factory, width=360)` to expose one primary tool panel. The GUI-thread factory receives a parent and creates its content inside it. The plugin then appears in the user-selected vertical tab picker. See [panel examples and lifecycle](docs/GUI.md). Hidden panels preserve state; register cleanup for workers and resources.
+
+For loading progress, finish an operation only after its GUI result is applied: `loading_indicator.finish(token, widget=panel, ready=is_ready)` waits for readiness, mapping, and a display frame. Use `loading_indicator.stop(token)` for cancellation. Each token remains independent. A dock factory can return a widget with `_loading_ready = False` until its asynchronous setup completes on the GUI thread; set the attribute to `True` when the panel is ready.

@@ -59,7 +59,11 @@ The host computer keeps the complete shared project, room history, attachments, 
 
 You can still enter the address, room, and key manually if needed.
 
-All clients in the room can read the shared project and publish changes. Each key identifies one client for messages; it is not a separate file-permission role. The host can revoke a selected client key in Client Keys & Invitations. Revocation blocks subsequent requests; it does not erase previously downloaded copies.
+In **Project Copies → Client Keys & Invitations…**, the host chooses **read-only**, **member**, or **admin** access before generating a key. Read-only clients can read their allowed project files and send chat messages, but cannot publish changes or upload attachments. Members can publish changes. Admin invitations can also manage client keys and inspect history; give them only to trusted people. Existing invitations keep member access.
+
+Optionally enter allowed project folders separated by commas, such as `documents, assets/images`. Blank means the entire shared project. The server filters manifests and rejects file requests outside those folders. Folder restrictions apply to project files; chat remains limited to the invitation’s room. Admin access covers the whole project and cannot be folder restricted.
+
+To remove an unwanted client, select them and click **Remove Client…**, then confirm. The client disappears from the list and their old key is rejected on subsequent requests, including after host restart. Their downloaded copies remain on their computer. Generate a new invitation if you want them to join again. **Revoke Selected Key** also blocks access but keeps the client visible as revoked.
 
 ## Understanding Host and Client IP addresses and ports
 
@@ -82,11 +86,21 @@ On a LAN/VPN, the host address is filled in automatically when a suitable local 
 
 ## Conflicts and file limits
 
-If Alice and Bob both change a file, Alice can send her version first. Bob's later upload is rejected as a conflict. His local text stays intact. Bob can keep a copy outside the shared folder, compare it with the current host version, and reconcile the changes. To reset a conflicting file to the server version, first move Bob's file out of his project folder, Pull Project, then apply the changes to that new copy and send again.
+If Alice and Bob both change a file, Alice can send her version first. Bob's later upload is rejected as a conflict. His local file stays intact, and the plugin creates a recovery copy under the client data directory’s `client-conflicts` folder. The sync result shows that folder. Each recovery file has a JSON sidecar containing its original project path and baseline version. Bob can compare it with the current host version and reconcile the changes. To reset a conflicting file to the server version, first move Bob's file out of his project folder, Pull Project, then apply the changes to that new copy and send again.
 
 The host's selected folder is authoritative. Host-side disk edits appear in subsequent pulls. Close host file tabs before allowing clients to replace those files, and save local edits before syncing. Deletions are performed on the host; pulling does not delete extra local files, and Send Changes does not publish deletions. Automatic merging and simultaneous live typing are not implemented.
 
-A shared project is limited to 5000 files and 512 MiB total, with 50 MiB per file. Symbolic links, `.git`, `.hg`, `.svn`, `.ssh`, `.aws`, virtual environments, `node_modules`, `__pycache__`, `.env*`, `*.pem`, `*.key`, `id_rsa`, and `id_ed25519` are excluded. Choose a dedicated project folder containing the files you intend to share. Attachment and prior-version stores each have a separate 1 GiB limit.
+A shared project is limited to 5000 files and 512 MiB total, with 50 MiB per file. Symbolic links, `.git`, `.hg`, `.svn`, `.ssh`, `.aws`, virtual environments, `node_modules`, `__pycache__`, `.env*`, `*.pem`, `*.key`, `id_rsa`, and `id_ed25519` are excluded. Choose a dedicated project folder containing the files you intend to share. Attachment storage has a separate 1 GiB limit. Current project content and retained versions share another 1 GiB limit.
+
+## Host file store and versioned synchronization
+
+The host maintains `project.sqlite3`, a SQLite index of project path, SHA-256, size, version number, author, and change time. Saved host edits are indexed on the next project operation; unsaved drafts are not shared. Immutable file contents live once per SHA-256 in `project-versions`, including the currently indexed version. Identical contents across paths share the same stored blob. Historical metadata records creates, updates, and host-side deletions. History is retained until host storage fills; automatic 30-day cleanup is not implemented.
+
+Updated clients negotiate protocol 2, send their last-known path/hash/version manifest, and receive changed entries plus removed paths. File contents are downloaded only when their checksums differ. Each upload includes the baseline version and hash. A stale revision is rejected even if the host file has returned to an earlier checksum. Versions and client baselines survive restarts. Legacy clients continue to use hash-based checks; upgrade both ends to use version checks.
+
+The client validates the complete incoming manifest, paths, versions, file counts, sizes, and checksums before applying it. Symbolic links and paths outside its selected folder are rejected. A failed download checksum does not replace the local file.
+
+This upgrade provides the file-store foundation, revision conflicts, invitation roles, folder restrictions, and client removal. Resumable chunk uploads, push notifications, automatic backups, per-client quotas/rate limits, file locks, and a history-restore GUI remain future work. Project pulls and sends remain explicit user actions; no live editing or structured-record database is introduced.
 
 ## Team chat and media files
 

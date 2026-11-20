@@ -45,6 +45,7 @@ class CommandPalette:
             return
         root = self.editor.root
         self.commands = menu_commands(root, self.editor.menu_bar)
+        self.commands.extend(menu_commands(root, self.editor.plugins, "Plugins"))
         window = self.window = tk.Toplevel(root)
         window.title('Command Palette')
         window.transient(root)

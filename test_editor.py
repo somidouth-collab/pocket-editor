@@ -37,6 +37,9 @@ class EditorTests(unittest.TestCase):
             self.dialogs.append(mock)
             setattr(self, name, mock.start())
         self.editor = core.Editor(self.root, False)
+        deadline=time.monotonic()+10
+        while not self.editor.plugins_ready and time.monotonic()<deadline:self.pump(.01)
+        self.assertTrue(self.editor.plugins_ready)
         self.pump()
 
     def tearDown(self):
@@ -75,7 +78,12 @@ class EditorTests(unittest.TestCase):
         self.pump()
 
     def window(self, title):
-        return next(w for w in self.root.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == title)
+        deadline=time.monotonic()+3
+        while time.monotonic()<deadline:
+            result=next((w for w in self.root.winfo_children() if isinstance(w,tk.Toplevel) and w.title()==title),None)
+            if result is not None:return result
+            self.pump(.01)
+        self.fail('Window did not open: '+title+'; '+str(self.editor.plugin_errors))
 
     def entry(self, window, row):
         return next(w for w in widgets(window) if isinstance(w, ttk.Entry) and str(w.grid_info().get('row')) == str(row))
@@ -90,15 +98,14 @@ class EditorTests(unittest.TestCase):
                             if not path.name.startswith("_")}
         self.assertEqual(set(e.plugin_apis), expected_plugins)
         self.assertEqual(list(e.plugin_apis), sorted(e.plugin_apis))
-        before = (len(e.plugin_buttons), e.plugins.index('end'))
+        before = e.plugins.index('end')
         e.load_plugins(); self.pump()
-        self.assertEqual(before, (len(e.plugin_buttons), e.plugins.index('end')))
+        self.assertEqual(before, e.plugins.index('end'))
         self.assertIn('code_theme.refresh', e.plugin_apis['code_theme'].list_services())
         self.command('Project Explorer')
         self.assertEqual(e.status.winfo_width(), self.root.winfo_width())
         self.root.geometry('500x600'); self.pump()
-        self.assertEqual(e.plugin_buttons, [])
-        self.assertLess(e.plugin_strip.winfo_height(), 55)
+        self.assertFalse(hasattr(e, "plugin_strip"))
         p = self.folder / 'bad.py'
         p.write_text('def register(api):\n api.on_cleanup(lambda: setattr(api._editor, "cleaned", True))\n api.provide_service("bad", lambda: None)\n raise ValueError("intentional")\n')
         with patch.object(core, 'PLUGIN_DIR', self.folder):
@@ -119,35 +126,16 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(len(seen), 2)
         self.assertEqual(len(self.errors), 1); self.errors.clear()
 
-    def test_compact_extensions_custom_shortcuts_and_persistence(self):
+    def test_plugins_use_menu_and_vertical_tabs_only(self):
         e = self.editor
-        self.assertEqual(e.plugin_buttons, [])
-        self.assertEqual(str(e.extensions_button.cget('menu')), str(e.extensions_menu))
-        self.assertNotEqual(str(e.extensions_menu), str(e.plugins))
-        theme_index = next(i for i in range(e.toolbar_menu.index('end') + 1)
-                           if e.toolbar_menu.entrycget(i, 'label') == 'Code Theme  (code_theme)')
-        e.toolbar_menu.invoke(theme_index); self.pump()
-        self.assertEqual(len(e.plugin_buttons), 1)
-        self.assertEqual(e.plugin_buttons[0].cget('text'), 'Code Theme')
-        self.assertEqual(core.read_settings()['toolbar_commands'], ['code_theme:Code Theme'])
-        e.plugin_buttons[0].invoke(); self.pump()
-        self.assertTrue(self.window('Code Theme').winfo_exists())
-        for index in range(e.toolbar_menu.index('end') + 1):
-            if index != theme_index:
-                e.toolbar_menu.invoke(index)
-        self.root.geometry('500x600'); self.pump()
-        self.assertLess(e.plugin_strip.winfo_height(), 55)
-        self.assertEqual({w.grid_info()['row'] for w in e.plugin_buttons if w.winfo_manager()}, {0})
-        self.assertTrue(e.plugin_overflow.winfo_ismapped())
-        self.assertIsNotNone(e.plugin_overflow_menu.index('end'))
-        count = len(e.plugin_buttons)
-        e.load_plugins(); self.pump()
-        self.assertEqual(len(e.plugin_buttons), count)
-        self.assertEqual(len(core.read_settings()['toolbar_commands']), count)
-        e.toolbar_menu.invoke(theme_index); self.pump()
-        self.assertNotIn('code_theme:Code Theme', core.read_settings()['toolbar_commands'])
-        core.SETTINGS_PATH.write_text('{"toolbar_commands": [1, null]}')
-        self.assertEqual(core.read_settings()['toolbar_commands'], [])
+        self.assertFalse(hasattr(e, 'plugin_strip'))
+        self.assertFalse(hasattr(e, 'toolbar_menu'))
+        core.SETTINGS_PATH.write_text('{"toolbar_commands": ["code_theme:Code Theme"]}')
+        self.assertNotIn('toolbar_commands', core.read_settings())
+        e.save_settings()
+        self.assertNotIn('toolbar_commands', core.SETTINGS_PATH.read_text())
+        e.command_palette.show();self.pump()
+        self.assertTrue(any('Code Theme' in row[0] for row in e.command_palette.commands))
 
     def test_tabs_preserve_undo_cursor_formatting_and_plugins(self):
         e = self.editor

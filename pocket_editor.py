@@ -13,6 +13,7 @@ import os
 import stat
 import tempfile
 import runpy
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, font, messagebox, simpledialog, ttk
@@ -26,7 +27,7 @@ from plugin_sidebar import PluginSidebar, DEFAULT_PINS
 
 PLUGIN_DIR = Path(__file__).resolve().parent / "pocket_editor_plugins"
 SETTINGS_PATH = PLUGIN_DIR.parent / "pocket_editor_settings.json"
-DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "toolbar_commands": [], "disabled_plugins": [], "sidebar_plugins": list(DEFAULT_PINS), "sidebar_active": "project_explorer", "sidebar_width": 320}
+DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "disabled_plugins": [], "sidebar_plugins": list(DEFAULT_PINS), "sidebar_active": "project_explorer", "sidebar_width": 320}
 EXAMPLE = '''"""Add a command that counts words in the current document."""
 from tkinter import messagebox
 
@@ -223,10 +224,6 @@ def read_settings():
         settings["font_family"] = saved["font_family"]
     if type(saved.get("tab_width")) is int and 1 <= saved["tab_width"] <= 16:
         settings["tab_width"] = saved["tab_width"]
-    pinned = saved.get("toolbar_commands")
-    if isinstance(pinned, list) and len(pinned) <= 500 and all(
-            isinstance(key, str) and 0 < len(key) <= 512 for key in pinned):
-        settings["toolbar_commands"] = list(dict.fromkeys(pinned))
     disabled = saved.get("disabled_plugins")
     if isinstance(disabled, list) and len(disabled) <= 10000 and all(
             isinstance(name, str) and 0 < len(name) <= 255 and name not in (".", "..") and
@@ -246,6 +243,15 @@ class Editor:
 
     def __init__(self, root, safe_mode):
         self.root = root
+        self.settings_path = SETTINGS_PATH
+        self.plugins_ready = bool(safe_mode)
+        self._plugins_loading = False
+        self._plugin_job = None
+        self._ready_callbacks = []
+        self._load_token = None
+        self._load_api = None
+        self._quit_pending = False
+        self.plugin_load_times = {}
         self.documents = []
         self.active_document = None
         self.path = None
@@ -274,9 +280,7 @@ class Editor:
         self.editor_font.configure(size=settings["font_size"])
         if settings["font_family"] in font.families(root):
             self.editor_font.configure(family=settings["font_family"])
-        self.toolbar_commands = list(settings["toolbar_commands"])
         self.plugin_commands = []
-        self.toolbar_variables = {}
         self.tab_width = settings["tab_width"]
         self.settings_window = None
         self.gutter_font = font.nametofont("TkFixedFont", root=root).copy()
@@ -287,18 +291,7 @@ class Editor:
         root.geometry("1280x840")
         root.minsize(480, 320)
         root.protocol("WM_DELETE_WINDOW", self.quit)
-        self.plugin_buttons = []
         self.build_header()
-        self.plugin_strip = ttk.Frame(root, style="Chrome.TFrame", padding=(10, 3))
-        self.extensions_button = ttk.Menubutton(self.plugin_strip, text="Extensions", style="Extensions.TMenubutton")
-        self.extensions_button.pack(side="left")
-        self.plugin_toolbar = ttk.Frame(self.plugin_strip, style="Chrome.TFrame")
-        self.plugin_toolbar.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.plugin_overflow_menu = tk.Menu(self.plugin_strip, tearoff=False)
-        self.plugin_overflow = ttk.Menubutton(self.plugin_strip, text="More",
-                                             menu=self.plugin_overflow_menu, style="Extensions.TMenubutton")
-        self.plugin_strip.bind("<Configure>", self.layout_plugin_buttons)
-        self.plugin_strip.pack(fill="x")
         self.workspace = ttk.Frame(root)
         self.workspace.pack(fill="both", expand=True)
         self.plugin_sidebar = PluginSidebar(self, self.workspace, settings)
@@ -342,8 +335,6 @@ class Editor:
         self.split_editor = SplitEditor(self)
         self.build_menu()
         self.rebuild_extensions_menu()
-        if safe_mode:
-            self.extensions_button.configure(state="disabled")
         self.apply_settings()
         self.buffer.bind("<Configure>", self.queue_gutter)
 
@@ -353,7 +344,9 @@ class Editor:
         self.buffer.focus_set()
         self.refresh()
         if not safe_mode:
-            root.after_idle(self.load_plugins)
+            available=[path for path in PLUGIN_DIR.glob('*.py') if not path.name.startswith('_') and path.stem not in self.disabled_plugins]
+            if available:self._plugin_job=root.after(20,lambda:self.load_plugins(background=True))
+            else:self.plugins_ready=True
 
     def setup_appearance(self):
         """UI typography is independent of the document and gutter fonts."""
@@ -500,7 +493,10 @@ class Editor:
         help_menu.add_command(label="Documentation…", command=self.show_documentation)
         help_menu.add_command(label="About Pocket Editor…", command=self.about.show)
         for label, menu in (("File", files), ("Edit", edit), ("View", view), ("Settings", settings), ("Plugins", self.plugins), ("Help", help_menu)):
-            bar.add_cascade(label=label, menu=menu)
+            if label == "Plugins":
+                bar.add_command(label=label, command=self.plugin_sidebar.show_commands)
+            else:
+                bar.add_cascade(label=label, menu=menu)
         for label, action, key in (
             ("New", self.new, "n"), ("Open…", self.open_dialog, "o"),
             ("Quick Open…", self.quick_open.show, "p"),
@@ -542,8 +538,6 @@ class Editor:
         self.plugins.add_command(label="Plugin Folder…", command=self.show_plugin_folder)
         self.plugins.add_command(label="Install Example Plugin", command=self.install_example)
         self.plugins.add_command(label="Load New Plugins", command=self.load_plugins)
-        self.toolbar_menu = tk.Menu(self.plugins, tearoff=False)
-        self.plugins.add_cascade(label="Add to toolbar", menu=self.toolbar_menu)
         self.plugins.add_separator()
 
     def shortcut(self, menu, label, action, key):
@@ -792,15 +786,26 @@ class Editor:
         return True
 
     def quit(self):
-        previous = self.active_document
-        for document in tuple(self.documents):
-            self.select_document(document)
-            if not self.may_discard():
-                self.select_document(previous)
-                return
+        if self.closing:return
+        if not self.plugins_ready:
+            if not self._quit_pending:
+                self._quit_pending=True
+                self.when_plugins_ready(self.quit)
+            return
+        previous=self.active_document
         if self.session:
             self.select_document(previous)
-            self.session.finish()
+            if not self.save_settings():return
+            if not self.session.finish():
+                messagebox.showerror('Workspace not saved','The workspace backup could not be saved. The editor remains open to protect your drafts.',parent=self.root)
+                return
+        else:
+            for document in tuple(self.documents):
+                self.select_document(document)
+                if not self.may_discard():
+                    self.select_document(previous);return
+            self.select_document(previous)
+            if not self.save_settings():return
         self.closing = True
         self.quick_open.close()
         self.plugin_sidebar.cleanup()
@@ -840,7 +845,6 @@ class Editor:
             "font_size": self.editor_font.cget("size"),
             "font_family": self.editor_font.cget("family"),
             "tab_width": self.tab_width,
-            "toolbar_commands": self.toolbar_commands,
             "disabled_plugins": sorted(self.disabled_plugins),
         }
         try:
@@ -979,88 +983,75 @@ class Editor:
             return
         self.load_plugins()
 
-    def load_plugins(self):
-        if self.safe_mode:
-            return
-        errors = []
-        for path in sorted(PLUGIN_DIR.glob("*.py")):
-            if path.name.startswith("_") or path in self.loaded_plugins or path.stem in self.disabled_plugins:
-                continue
-            api = PluginAPI(self, path.stem)
-            try:
-                plugin = runpy.run_path(str(path), run_name=path.stem)
-                plugin["register"](api)
-            except (Exception, SystemExit) as error:
-                self.cleanup_plugin(api)
-                self.plugin_errors[path.stem] = f"{type(error).__name__}: {error}"[:4000]
-                errors.append(f"{path.name}: {self.plugin_errors[path.stem]}")
-                continue
-            for label, callback in api._commands:
-                command = lambda callback=callback, name=path.name: self.run_plugin(name, callback)
-                self.plugins.add_command(label=label, command=command)
-                key = f"{path.stem}:{label}"
-                self.plugin_commands.append((key, label, command))
-                variable = tk.BooleanVar(self.root, key in self.toolbar_commands)
-                self.toolbar_variables[key] = variable
-                self.toolbar_menu.add_checkbutton(label=f"{label}  ({path.stem})", variable=variable,
-                    command=lambda key=key: self.toggle_toolbar_command(key))
-            self.plugin_errors.pop(path.stem, None)
-            self.loaded_plugins.add(path)
-            self.plugin_apis[path.stem] = api
-            api.emit("plugin_loaded", plugin_id=path.stem)
-        self.rebuild_plugin_buttons()
-        self.rebuild_extensions_menu()
-        if errors:
-            messagebox.showerror("Plugin loading errors", "\n".join(errors), parent=self.root)
+    def when_plugins_ready(self, callback):
+        if self.plugins_ready:self.root.after_idle(callback)
+        else:self._ready_callbacks.append(callback)
+
+    def _register_plugin(self, path):
+        api=PluginAPI(self,path.stem)
+        started=time.perf_counter()
+        try:
+            plugin=runpy.run_path(str(path),run_name=path.stem)
+            plugin['register'](api)
+        except (Exception,SystemExit) as error:
+            self.cleanup_plugin(api)
+            self.plugin_errors[path.stem]=f'{type(error).__name__}: {error}'[:4000]
+            return path.name+': '+self.plugin_errors[path.stem]
+        finally:self.plugin_load_times[path.stem]=time.perf_counter()-started
+        for label,callback in api._commands:
+            command=lambda callback=callback,name=path.name:self.run_plugin(name,callback)
+            self.plugins.add_command(label=label,command=command)
+            key=f'{path.stem}:{label}'
+            self.plugin_commands.append((key,label,command))
+        self.plugin_errors.pop(path.stem,None)
+        self.loaded_plugins.add(path);self.plugin_apis[path.stem]=api
+        api.emit('plugin_loaded',plugin_id=path.stem)
+        return None
+
+    def load_plugins(self, background=False):
+        if self.safe_mode or self.closing or self._plugins_loading:return
+        if self._plugin_job is not None:
+            self.root.after_cancel(self._plugin_job);self._plugin_job=None
+        paths=[path for path in sorted(PLUGIN_DIR.glob('*.py')) if not path.name.startswith('_')
+               and path not in self.loaded_plugins and path.stem not in self.disabled_plugins]
+        # The lightweight visual service loads first; all other plugins retain filename order.
+        paths.sort(key=lambda path:path.stem!='loading_indicator')
+        self._plugins_loading=True
+        errors=[];total=len(paths)
+        def finish():
+            self._plugin_job=None;self._plugins_loading=False;self.plugins_ready=True
+            if self._load_api and self._load_token is not None:
+                self._load_api.call_service('loading_indicator.finish',self._load_token)
+                self._load_token=None
+            self.plugin_apis=dict(sorted(self.plugin_apis.items()))
+            self.rebuild_extensions_menu()
+            self.dispatch_plugin_event('plugins_loaded','editor',{})
+            self.refresh()
+            callbacks,self._ready_callbacks=self._ready_callbacks,[]
+            for callback in callbacks:self.root.after_idle(callback)
+            if errors:messagebox.showerror('Plugin loading errors','\n'.join(errors),parent=self.root)
+        def step():
+            self._plugin_job=None
+            if self.closing:return
+            if not paths:finish();return
+            path=paths.pop(0)
+            caption=f'Loading {path.stem.replace("_"," ").title()}… ({total-len(paths)}/{total})'
+            self.status.configure(text=caption)
+            if self._load_api and self._load_token is not None:
+                self._load_api.call_service('loading_indicator.update',self._load_token,message=caption,
+                    progress=(total-len(paths))/max(1,total))
+            error=self._register_plugin(path)
+            if error:errors.append(error)
+            if path.stem=='loading_indicator' and not error:
+                self._load_api=self.plugin_apis[path.stem]
+                self._load_token=self._load_api.call_service('loading_indicator.start',message='Preparing plugins…')
+            if background:self._plugin_job=self.root.after(1,step)
+        if background:step()
+        else:
+            while paths:step()
+            finish()
 
     def rebuild_extensions_menu(self):
-        # A dropdown owns its menu: do not share the menubar's posted menu.
-        if not hasattr(self, "extensions_menu"):
-            self.extensions_menu = tk.Menu(self.extensions_button, tearoff=False)
-            self.extensions_button.configure(menu=self.extensions_menu, direction="below")
-        menu = self.extensions_menu
-        menu.delete(0, "end")
-        for child in menu.winfo_children():
-            child.destroy()
-        menu.add_command(label="Search Commands…", command=self.command_palette.show)
-        menu.add_command(label="Plugin Manager…", command=self.plugin_manager.show)
-        if self.safe_mode:
-            menu.add_command(label="Plugins disabled in safe mode", state="disabled")
-            return
-        menu.add_command(label="Load New Plugins", command=self.load_plugins)
-        menu.add_command(label="Plugin Folder…", command=self.show_plugin_folder)
-        menu.add_command(label="Install Example Plugin", command=self.install_example)
-        shortcuts = tk.Menu(menu, tearoff=False)
-        menu.add_command(label="Choose vertical plugin tabs…", command=self.plugin_sidebar.choose)
-        menu.add_cascade(label="Add to toolbar", menu=shortcuts)
-        menu.add_separator()
-        groups = {}
-        for key, label, callback in self.plugin_commands:
-            owner = key.split(":", 1)[0]
-            groups.setdefault(owner, []).append((key, label, callback))
-        for owner, commands in groups.items():
-            title = owner.replace("_", " ").title()
-            if len(commands) == 1:
-                menu.add_command(label=commands[0][1], command=commands[0][2])
-            else:
-                child = first_page = tk.Menu(menu, tearoff=False)
-                for number, (key, label, callback) in enumerate(commands):
-                    if number and number % 18 == 0:
-                        following = tk.Menu(child, tearoff=False)
-                        child.add_cascade(label="More…", menu=following)
-                        child = following
-                    child.add_command(label=label, command=callback)
-                menu.add_cascade(label=title, menu=first_page)
-            child = first_page = tk.Menu(shortcuts, tearoff=False)
-            for number, (key, label, callback) in enumerate(commands):
-                if number and number % 18 == 0:
-                    following = tk.Menu(child, tearoff=False)
-                    child.add_cascade(label="More…", menu=following)
-                    child = following
-                child.add_checkbutton(label=label, variable=self.toolbar_variables[key],
-                                      command=lambda key=key: self.toggle_toolbar_command(key))
-            shortcuts.add_cascade(label=title, menu=first_page)
-
         self.plugin_sidebar.refresh()
 
     def dispatch_plugin_event(self, event, source, payload):
@@ -1074,54 +1065,11 @@ class Editor:
                     except (Exception, SystemExit) as error:
                         self.root.report_callback_exception(type(error), error, error.__traceback__)
 
-    def toggle_toolbar_command(self, key):
-        if self.toolbar_variables[key].get():
-            if key not in self.toolbar_commands:
-                self.toolbar_commands.append(key)
-        else:
-            self.toolbar_commands = [item for item in self.toolbar_commands if item != key]
-        self.rebuild_plugin_buttons()
-        self.save_settings()
-
-    def rebuild_plugin_buttons(self):
-        if self.toolbar_commands:
-            self.plugin_strip.pack(fill="x", before=self.workspace)
-        else:
-            self.plugin_strip.pack_forget()
-        for button in self.plugin_buttons:
-            button.destroy()
-        self.plugin_buttons.clear()
-        commands = {key: (label, command) for key, label, command in self.plugin_commands}
-        for key in self.toolbar_commands:
-            if key in commands:
-                label, command = commands[key]
-                button = ttk.Button(self.plugin_toolbar, text=label, command=command, style="Plugin.TButton")
-                self.plugin_buttons.append(button)
-        self.root.after_idle(self.layout_plugin_buttons)
-
-    def layout_plugin_buttons(self, _event=None):
-        # Reserve a single row. Shortcuts that do not fit stay accessible in More.
-        available = max(0, self.plugin_strip.winfo_width() - 32 -
-                        self.extensions_button.winfo_reqwidth() - 8)
-        widths = [button.winfo_reqwidth() + 6 for button in self.plugin_buttons]
-        overflow = sum(widths) > available
-        if overflow:
-            available = max(0, available - self.plugin_overflow.winfo_reqwidth() - 8)
-            self.plugin_overflow.pack(side="right", before=self.plugin_toolbar)
-        else:
-            self.plugin_overflow.pack_forget()
-        self.plugin_overflow_menu.delete(0, "end")
-        used = column = 0
-        for button, width in zip(self.plugin_buttons, widths):
-            if used + width <= available:
-                button.grid(row=0, column=column, padx=3, pady=0, sticky="w")
-                column += 1
-                used += width
-            else:
-                button.grid_remove()
-                self.plugin_overflow_menu.add_command(label=button.cget("text"), command=button.invoke)
-
-    def run_plugin(self, name, callback):
+    def run_plugin(self, name, callback, _loading_shown=False):
+        if self.closing:return
+        owner=Path(name).stem
+        if not _loading_shown and owner in self.plugin_apis:
+            if self.plugin_sidebar.defer_window(owner,callback,lambda:self.run_plugin(name,callback,_loading_shown=True)):return
         try:
             callback()
         except (Exception, SystemExit) as error:
@@ -1139,11 +1087,21 @@ def main():
     editor = Editor(root, args.safe_mode)
     def start_session():
         from editor_session import EditorSession
-        if not args.no_session:
-            EditorSession(editor, SETTINGS_PATH.with_name('pocket_editor_session.json')).start()
-        if args.file:
-            editor.open_path(args.file)
-    root.after_idle(start_session)
+        api=editor.plugin_apis.get('loading_indicator');token=None
+        if api and not args.no_session:
+            try:token=api.call_service('loading_indicator.start',message='Restoring your workspace…')
+            except LookupError:pass
+            root.update_idletasks()
+        try:
+            if not args.no_session:
+                if not EditorSession(editor,SETTINGS_PATH.with_name('pocket_editor_session.json')).start():
+                    editor.status.configure(text='Another editor owns this workspace session. Close it before testing automatic restore.')
+            if args.file:editor.open_path(args.file)
+        finally:
+            if api and token is not None:
+                try:api.call_service('loading_indicator.finish',token)
+                except LookupError:pass
+    editor.when_plugins_ready(start_session)
     root.mainloop()
 
 

@@ -23,7 +23,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);self.project(root)
             for name in ('client.team-invite','pocket_editor_session.json','pocket_editor_settings.json',
-                         'pocket_editor_about.json','private_script.py','pocket_editor_plugins/git_project_settings.json',
+                         'pocket_editor_about.json','project_explorer_settings.json','private_script.py','pocket_editor_plugins/git_project_settings.json',
                          'tools/php/node_modules/secret.js','tools/php/cache/private.json','audit/report.md','testp/private.py'):
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('PRIVATE-CONTENT')
             archive,_=build_release(root,root/'dist','test')

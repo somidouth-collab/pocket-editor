@@ -267,6 +267,26 @@ class ExampleGuiTests(unittest.TestCase):
         self.root.update()
         self.assertTrue(any('Gemini example' in w.title() for w in self.app.window.winfo_children() if isinstance(w, example.tk.Toplevel)))
 
+    def test_404_repair_clears_unavailable_model_without_generation_retry(self):
+        self.app.provider.set('Google Gemini'); self.app.apply_preset()
+        self.app.key.set('private-google-key')
+        self.app.values['model'].set('gemini-2.5-flash-lite')
+        self.app.prompt.insert('1.0','Hello Gemini')
+        error = HTTPError('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',404,'not found',{},
+                          BytesIO(json.dumps({'error':{'message':'Model not available. api_key=private-google-key'}}).encode()))
+        with patch.object(example,'send_request',side_effect=error) as send:
+            self.app.submit();self.wait_done();self.assertEqual(send.call_count,1)
+        self.assertTrue(self.app.repair_button.winfo_ismapped())
+        self.assertIn('gemini-2.5-flash-lite',self.app.status.cget('text'))
+        self.assertNotIn('private-google-key',self.app.output.get('1.0','end-1c'))
+        self.assertEqual(self.app.prompt.get('1.0','end-1c'),'Hello Gemini')
+        with patch.object(example,'list_models',return_value=['gemini-available']) as listing, patch.object(example,'send_request') as send:
+            self.app.repair_connection();self.wait_done()
+            listing.assert_called_once();send.assert_not_called()
+        self.assertEqual(self.app.values['model'].get(),'')
+        self.assertIn('gemini-available',self.app.model_picker.cget('values'))
+        self.assertIn('not in the available',self.app.settings_status.cget('text'))
+
 
 class GeminiTests(unittest.TestCase):
     def config(self):
@@ -338,8 +358,16 @@ class GeminiTests(unittest.TestCase):
             self.assertEqual(example.list_models(config, 'local-test-key'), ['gemini-test'])
             reply, _ = example.send_request(config, 'local-test-key', example.build_messages(config, 'Chat', 'hello'))
             self.assertEqual(reply, 'Local Gemini test reply')
-            self.assertEqual(seen[0], ('/v1beta/models', 'local-test-key'))
+            self.assertEqual(seen[0], ('/v1beta/models?pageSize=1000', 'local-test-key'))
             self.assertEqual(seen[1][0], '/v1beta/models/gemini-test:generateContent')
             self.assertEqual(seen[1][2]['contents'][0]['parts'][0]['text'], 'hello')
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=3)
+
+    def test_catalog_uses_base_model_id(self):
+        config=self.config()
+        with patch.object(example,'request_json',return_value={'models':[
+            {'name':'models/versioned-resource-001','baseModelId':'gemini-current',
+             'supportedGenerationMethods':['generateContent']} ]}) as request:
+            self.assertEqual(example.list_models(config,'key'),['gemini-current'])
+        self.assertTrue(request.call_args.args[2].endswith('/models?pageSize=1000'))
