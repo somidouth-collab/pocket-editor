@@ -58,3 +58,44 @@ On a panel's first open, a themed loading surface is painted before its widget f
 The vertical-tab picker has a scrollable checklist and a fixed footer. Save tabs and Cancel remain visible when the window is small or many plugins are installed. Mouse wheel, Linux wheel buttons, and keyboard focus scrolling work within the checklist. The picker and loading cards use the editor's near-black surfaces and blue accent.
 
 On first opening a vertical panel, the loading surface is painted before the panel factory starts. Panels are cached after opening; switching back preserves their contents.
+
+## Linux keyboard input and Undo/Redo
+
+Empty Undo/Redo operations are harmless, including requests originating in Tk’s Tcl event loop. They do not mark the document as changed; ordinary undoable edits and redo still work.
+
+On Linux with Tk 8.6 and the IBus/Fcitx XIM bridge, Automatic input mode starts Tk with local Compose input to avoid repeated fabricated-key-event warnings. XIM remains enabled for local compose and normal character input. The editor immediately restores its environment, so project subprocesses inherit the desktop’s original input-method configuration. No system packages or desktop settings are changed.
+
+External IME composition (for example IBus/Fcitx Chinese/Japanese input) needs **system** mode. Select **Settings → Preferences → Keyboard input → system**, apply, and restart. You can also choose it for one launch:
+
+```bash
+python3 -B pocket_editor.py --input-method system
+```
+
+`--input-method local` explicitly selects local Compose. The default is `auto`. These switches only affect the Linux/X11 keyboard backend and do not alter project files.
+
+References: [Tk’s XIM initialization](https://github.com/tcltk/tk/blob/core-8-6-branch/unix/tkUnixEvent.c) and [Xlib input-context focus fix](https://lists.debian.org/debian-x/2026/02/msg00185.html).
+
+## Windows clipboard and selection safety
+
+The local text-widget proxy forwards native commands through Tcl, preserving the completion/error codes that Tk’s Windows Paste, Copy, Cut, Clear, Undo, and selection bindings expect. Python observes successful edits rather than forwarding every native text command. Pasting with no selection no longer leaks an expected selection error into the Python main loop; native selection replacement and undo grouping are retained. Empty Undo/Redo operations remain harmless.
+
+Edit-menu clipboard commands target the focused text input (including settings/search entries) instead of unexpectedly modifying the document. Split-pane editing still targets the focused document.
+
+The regression suite exercises Tk’s actual Windows Paste procedure branch on the development host and includes keyboard events, missing/non-text clipboard handling, selection replacement, Unicode, undo/redo, and widget cleanup. This is not a claim of a completed Windows 10 desktop test. On Windows with Python/Tk installed, run:
+
+```bat
+py -B -m unittest -v test_windows_editing test_keyboard_input
+```
+
+Windows CI is configured locally to include these tests when the workflow is next published/run. No workflow or release is uploaded as part of this local fix.
+
+The local Python formatter also suppresses a separate console window for its Black subprocess on Windows. Native Windows 10 desktop validation is still needed; current checks execute Tk’s Windows paste branch on the Linux development host and cover keyboard/clipboard behavior without claiming to simulate the Windows clipboard driver.
+
+For a Windows source checkout or the local source test archive, run:
+
+```powershell
+py -B -m unittest -v test_windows_editing test_keyboard_input
+py pocket_editor.py
+```
+
+The local publishing workflow includes these GUI checks in its Windows job for the next authorized publication. No workflow has been uploaded or run remotely for these local changes.

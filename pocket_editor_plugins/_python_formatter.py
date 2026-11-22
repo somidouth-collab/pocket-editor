@@ -14,7 +14,8 @@ def format_source(source, filename, line_length):
                "--stdin-filename", str(filename), "-"]
     try:
         result = subprocess.run(command, input=source, capture_output=True,
-                                encoding="utf-8", timeout=60)
+                                encoding="utf-8", timeout=60,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Formatting exceeded 60 seconds. The document was left intact.") from None
     except OSError as error:

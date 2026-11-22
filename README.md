@@ -283,3 +283,7 @@ Explorer menus open on mouse release and remain posted until an explicit action 
 ## C/C++ formatting, completion, syntax checks, and debugging
 
 **C/C++ Tools** combines clang-format formatting, clangd autocomplete, compiler syntax checks with red zigzag underlines, and GDB debugging. Open it from Plugins or pin its vertical tab. On Debian install `clang-format clangd gdb build-essential`, then use C/C++ Settings → Detect tools → Save Settings. See the [C/C++ guide](docs/C_CPP.md) for setup, project compilation databases, debugger controls, and current limits.
+
+## FusionPHP .fpf templates (local addition)
+
+**FusionPHP Tools** adds template highlighting through Code Theme, conservative formatting, context-aware completion, syntax checks, and red zigzag error marks. It uses an offline parser based on the local FusionPHP compiler, without running application PHP. Open it from Plugins or pin its vertical tab. See the [FusionPHP guide](docs/FUSIONPHP.md).

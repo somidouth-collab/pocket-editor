@@ -4,7 +4,7 @@ from tkinter import ttk
 
 TITLES = {'project_explorer':'Project Explorer','project_terminal':'Terminal','git_project':'Git',
           'ai_assistant':'AI Assistant','codex_assistant':'Codex','team_project':'Team Project',
-          'python_tools':'Python Tools','php_tools':'PHP Tools','cpp_tools':'C/C++ Tools'}
+          'python_tools':'Python Tools','php_tools':'PHP Tools','cpp_tools':'C/C++ Tools','fusionphp_tools':'FusionPHP Tools','fusionphp_tools':'FusionPHP'}
 DEFAULT_PINS = ['project_explorer','search_replace','project_terminal','git_project','ai_assistant','codex_assistant','team_project']
 
 
@@ -81,7 +81,7 @@ class PluginSidebar:
                 canvas.create_rectangle(13,14,41,36,outline=color,width=2);canvas.create_text(27,25,text='>_',fill=color,font=self.editor.caption_font)
             else:
                 canvas.create_rectangle(13,12,41,38,outline=color,width=1)
-                text={'ai_assistant':'AI','codex_assistant':'CX','git_project':'Git','team_project':'TM','python_tools':'Py','php_tools':'PHP','cpp_tools':'C++'}.get(owner,owner[:2].upper())
+                text={'ai_assistant':'AI','codex_assistant':'CX','git_project':'Git','team_project':'TM','python_tools':'Py','php_tools':'PHP','cpp_tools':'C++','fusionphp_tools':'FPF','fusionphp_tools':'FPF'}.get(owner,owner[:2].upper())
                 canvas.create_text(27,25,text=text,fill=color,font=self.editor.caption_font)
 
     def show_tip(self,owner):

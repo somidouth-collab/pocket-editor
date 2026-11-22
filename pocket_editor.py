@@ -11,6 +11,7 @@ import codecs
 import json
 import os
 import stat
+import sys
 import tempfile
 import runpy
 import time
@@ -27,7 +28,7 @@ from plugin_sidebar import PluginSidebar, DEFAULT_PINS
 
 PLUGIN_DIR = Path(__file__).resolve().parent / "pocket_editor_plugins"
 SETTINGS_PATH = PLUGIN_DIR.parent / "pocket_editor_settings.json"
-DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "disabled_plugins": [], "sidebar_plugins": list(DEFAULT_PINS), "sidebar_active": "project_explorer", "sidebar_width": 320}
+DEFAULT_SETTINGS = {"line_numbers": True, "word_wrap": False, "font_size": 11, "font_family": "", "tab_width": 4, "input_method": "auto", "disabled_plugins": [], "sidebar_plugins": list(DEFAULT_PINS), "sidebar_active": "project_explorer", "sidebar_width": 320}
 EXAMPLE = '''"""Add a command that counts words in the current document."""
 from tkinter import messagebox
 
@@ -64,26 +65,73 @@ def atomic_write(path, data):
             temporary.unlink(missing_ok=True)
 
 
+def create_root(input_method='auto'):
+    """Select Tk's XIM connection before opening the display.
+
+    Tk 8.6 with the external IBus/Fcitx XIM bridge can repeatedly fabricate key
+    events. Automatic mode uses Xlib's local compose backend for this combination.
+    Restore the environment immediately so launched project tools retain their
+    normal desktop IME. System mode remains available for external composition.
+    """
+    if input_method not in ('auto','system','local'):
+        raise ValueError('Input method must be auto, system, or local.')
+    original=os.environ.get('XMODIFIERS')
+    affected=(sys.platform.startswith('linux') and tk.TkVersion<9 and
+              any(name in (original or '').lower() for name in ('@im=ibus','@im=fcitx')))
+    local=sys.platform.startswith('linux') and (input_method=='local' or input_method=='auto' and affected)
+    if local:os.environ['XMODIFIERS']='@im=none'
+    try:root=tk.Tk()
+    finally:
+        if local:
+            if original is None:os.environ.pop('XMODIFIERS',None)
+            else:os.environ['XMODIFIERS']=original
+    root.pocket_input_method='local' if local else 'system'
+    return root
+
+
 class DocumentText(tk.Text):
-    """Observe Tcl mutations, including typing while the dirty flag is already set."""
+    """Observe successful edits without moving native Tcl errors into Python.
+
+    Tk's Windows clipboard/selection bindings intentionally catch Tcl errors.
+    Forwarding those commands through a Python createcommand callback leaves a
+    pending Python exception even when the outer Tcl script caught the error.
+    A Tcl alias preserves Tcl completion codes; Python only receives edit notices.
+    """
+
+    _DISPATCH = "::pocket_editor::text_dispatch"
+    _BODY = r'''
+        set operation [lindex $args 0]
+        set editOperation [lindex $args 1]
+        if {[llength $args] == 2 && $operation eq "edit" && $editOperation in {undo redo}} {
+            set capability [expr {$editOperation eq "undo" ? "canundo" : "canredo"}]
+            if {![$original edit $capability]} {return ""}
+        }
+        set result [$original {*}$args]
+        if {$operation in {insert delete replace} || ($operation eq "edit" && $editOperation in {undo redo})} {
+            $notify
+        }
+        return $result
+    '''
 
     def __init__(self, master, changed, **options):
         super().__init__(master, **options)
         self._changed = changed
         self._original = self._w + "_original"
         self.tk.call("rename", self._w, self._original)
-        self.tk.createcommand(self._w, self._proxy)
+        self._observer = self._register(self._notify_change)
+        self.tk.call("namespace", "eval", "::pocket_editor", "")
+        if not self.tk.call("info", "procs", self._DISPATCH):
+            self.tk.call("proc", self._DISPATCH, ("original", "notify", "args"), self._BODY)
+        # Argument binding is done with Tcl lists, never interpolated script text.
+        self.tk.call("interp", "alias", "", self._w, "", self._DISPATCH, self._original, self._observer)
 
-    def _proxy(self, *args):
-        result = self.tk.call(self._original, *args)
-        if args and (args[0] in ("insert", "delete", "replace") or
-                     args[:2] in (("edit", "undo"), ("edit", "redo"))):
-            self._changed()
-        return result
+    def _notify_change(self):
+        self._changed()
 
     def destroy(self):
         super().destroy()
-        self.tk.deletecommand(self._w)
+        if self.tk.call("interp", "alias", "", self._w):
+            self.tk.call("rename", self._w, "")
 
 
 class ActiveBuffer:
@@ -214,6 +262,8 @@ def read_settings():
     if not isinstance(saved, dict):
         return DEFAULT_SETTINGS.copy()
     settings = DEFAULT_SETTINGS.copy()
+    if saved.get("input_method") in ("auto", "system", "local"):
+        settings["input_method"] = saved["input_method"]
     for key in ("line_numbers", "word_wrap"):
         if type(saved.get(key)) is bool:
             settings[key] = saved[key]
@@ -271,6 +321,7 @@ class Editor:
         self.about = AboutDialog(self, lambda: SETTINGS_PATH.with_name("pocket_editor_about.json"))
         self.safe_mode = safe_mode
         settings = read_settings()
+        self.input_method = settings["input_method"]
         self.disabled_plugins = set(settings["disabled_plugins"])
         self.plugin_errors = {}
         self.plugin_manager = PluginManager(self, lambda: PLUGIN_DIR)
@@ -511,8 +562,7 @@ class Editor:
             ("Undo", "Undo"), ("Redo", "Redo"), ("Cut", "Cut"),
             ("Copy", "Copy"), ("Paste", "Paste"), ("Select All", "SelectAll"),
         ):
-            edit.add_command(label=label, command=lambda event=event:
-                             self.buffer.event_generate(f"<<{event}>>"))
+            edit.add_command(label=label, command=lambda event=event:self.edit_event(event))
         edit.add_separator()
         self.shortcut(edit, "Command Palette…", self.command_palette.show, "Shift-p")
         self.root.bind(f"<{self.modifier}-Shift-P>", lambda event: self.command_palette.show() or "break")
@@ -539,6 +589,18 @@ class Editor:
         self.plugins.add_command(label="Install Example Plugin", command=self.install_example)
         self.plugins.add_command(label="Load New Plugins", command=self.load_plugins)
         self.plugins.add_separator()
+
+    def edit_event(self, event):
+        """Edit the focused text field; fall back to the active document."""
+        if self.closing:return
+        try:
+            target=self.root.focus_get()
+            if target is None or target.winfo_class() not in ("Text","Entry","TEntry","Spinbox","TSpinbox","TCombobox"):
+                target=self.buffer.widget
+        except (tk.TclError,KeyError):
+            # Native/cloned menus need not have a Python widget wrapper.
+            target=self.buffer.widget
+        target.event_generate(f"<<{event}>>")
 
     def shortcut(self, menu, label, action, key):
         display_key = key.upper().replace("SHIFT-", "Shift+")
@@ -845,6 +907,7 @@ class Editor:
             "font_size": self.editor_font.cget("size"),
             "font_family": self.editor_font.cget("family"),
             "tab_width": self.tab_width,
+            "input_method": self.input_method,
             "disabled_plugins": sorted(self.disabled_plugins),
         }
         try:
@@ -870,6 +933,7 @@ class Editor:
         tabs = tk.StringVar(window, str(self.tab_width))
         numbers = tk.BooleanVar(window, self.line_numbers.get())
         wrap = tk.BooleanVar(window, self.word_wrap.get())
+        input_method = tk.StringVar(window, self.input_method)
         typography = ttk.LabelFrame(body, text="Document font", padding=12)
         typography.pack(fill="x")
         ttk.Label(typography, text="Font family").grid(row=0, column=0, sticky="w", pady=5)
@@ -886,6 +950,14 @@ class Editor:
         row.pack(fill="x")
         ttk.Label(row, text="Tab width (spaces)").pack(side="left")
         ttk.Spinbox(row, from_=1, to=16, textvariable=tabs, width=8).pack(side="right")
+        keyboard = ttk.LabelFrame(body, text="Keyboard input", padding=12)
+        keyboard.pack(fill="x", pady=(0,12))
+        ttk.Label(keyboard,text="Input method (restart required)").pack(side="left")
+        ttk.Combobox(keyboard,textvariable=input_method,values=("auto","system","local"),
+                     state="readonly",width=10).pack(side="right",padx=(12,0))
+        ttk.Label(body,text="Auto uses local compose for the affected Linux/Tk/IBus combination.\n"
+                           "Choose system for external IME composition; restart to apply.",
+                  style="Muted.TLabel").pack(anchor="w",pady=(0,12))
         buttons = ttk.Frame(body)
         buttons.pack(fill="x")
 
@@ -902,6 +974,7 @@ class Editor:
             self.tab_width = tab_size
             self.line_numbers.set(numbers.get())
             self.word_wrap.set(wrap.get())
+            self.input_method = input_method.get()
             self.save_settings()
             if close:
                 window.destroy()
@@ -912,6 +985,7 @@ class Editor:
             tabs.set("4")
             numbers.set(True)
             wrap.set(False)
+            input_method.set("auto")
 
         ttk.Button(buttons, text="Restore Defaults", command=defaults).pack(side="left")
         ttk.Button(buttons, text="OK", command=lambda: apply(True)).pack(side="right", padx=(8, 0))
@@ -1082,8 +1156,10 @@ def main():
     parser.add_argument("file", nargs="?", type=Path)
     parser.add_argument("--safe-mode", action="store_true", help="start with plugins disabled")
     parser.add_argument("--no-session", action="store_true", help="start without session restore or draft backups")
+    parser.add_argument('--input-method',choices=('auto','system','local'),
+                        help='X11 keyboard backend; system enables external IME composition')
     args = parser.parse_args()
-    root = tk.Tk()
+    root = create_root(args.input_method or read_settings()['input_method'])
     editor = Editor(root, args.safe_mode)
     def start_session():
         from editor_session import EditorSession

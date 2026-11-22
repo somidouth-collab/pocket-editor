@@ -14,8 +14,8 @@ THEMES = {
     "Dracula": ("#282a36", "#f8f8f2", "#44475a", "#6272a4", "#ff79c6", "#f1fa8c", "#6272a4", "#bd93f9", "#50fa7b"),
     "Solarized Dark": ("#002b36", "#839496", "#073642", "#586e75", "#859900", "#2aa198", "#586e75", "#d33682", "#b58900"),
 }
-LANGUAGES = ("Auto", "Python", "JavaScript", "C/C++", "JSON", "PHP", "Plain text")
-EXTENSIONS = {".py": "Python", ".pyw": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+LANGUAGES = ("Auto", "Python", "JavaScript", "C/C++", "JSON", "PHP", "FusionPHP", "Plain text")
+EXTENSIONS = {".fpf": "FusionPHP", ".py": "Python", ".pyw": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
               ".ts": "JavaScript", ".tsx": "JavaScript", ".c": "C/C++", ".h": "C/C++",
               ".cpp": "C/C++", ".hpp": "C/C++", ".cc": "C/C++", ".json": "JSON", ".php": "PHP", ".phtml": "PHP", ".php8": "PHP"}
 WORDS = set(("if else for while do break continue return switch case default class struct enum "
@@ -32,7 +32,10 @@ PATTERN = re.compile(
 
 
 def spans(source, language):
-    if language == "Python":
+    if language == "FusionPHP":
+        from pocket_editor_plugins._fusionphp import highlight_spans
+        yield from highlight_spans(source)
+    elif language == "Python":
         lines = source.splitlines(keepends=True)
         offsets = [0]
         for line in lines:
@@ -89,14 +92,21 @@ def register(api):
         if (source, chosen) == (last_source, last_language):
             return
         last_source, last_language = source, chosen
-        for kind in ("keyword", "string", "comment", "number"):
+        for kind in ("keyword", "string", "comment", "number", "tag", "attribute", "field", "function"):
             text.tag_remove("syntax_" + kind, "1.0", "end")
         # Bound work so large documents remain usable.
         if len(source) > 300000:
             return
         ranges = {}
+        positions = None
+        if chosen == "FusionPHP":
+            from pocket_editor_plugins._fusionphp import TextPositions
+            positions = TextPositions(source)
         for kind, start, end in spans(source, chosen):
-            ranges.setdefault(kind, []).extend((f"1.0 +{start}c", f"1.0 +{end}c"))
+            if chosen == "FusionPHP":
+                indexes = (positions.index(start),positions.index(end))
+            else:indexes = (f"1.0 +{start}c", f"1.0 +{end}c")
+            ranges.setdefault(kind, []).extend(indexes)
         for kind, indexes in ranges.items():
             for offset in range(0, len(indexes), 1000):
                 text.tag_add("syntax_" + kind, *indexes[offset:offset + 1000])
@@ -110,13 +120,14 @@ def register(api):
 
     def apply(save=True):
         nonlocal last_source
-        bg, fg, selection, muted, kw, string, comment, number, _ = THEMES[theme.get()]
+        bg, fg, selection, muted, kw, string, comment, number, function = THEMES[theme.get()]
         text.configure(background=bg, foreground=fg, insertbackground=fg,
                        selectbackground=selection, selectforeground=fg,
                        inactiveselectbackground=selection)
         editor.gutter.configure(background=bg)
         editor.gutter_ink = muted
-        for kind, color in (("keyword", kw), ("string", string), ("comment", comment), ("number", number)):
+        for kind, color in (("keyword", kw), ("string", string), ("comment", comment), ("number", number), ("tag", kw),
+                            ("attribute", function), ("field", fg), ("function", function)):
             name = "syntax_" + kind
             text.tag_configure(name, foreground=color)
             text.tag_lower(name)
@@ -165,5 +176,6 @@ def register(api):
         api.on("document_changed", lambda **event: schedule())
         api.on("document_formatted", lambda **event: schedule())
         api.provide_service("refresh", schedule)
+    api.provide_service("settings", show)
     api.add_command("Code Theme", show)
     apply(save=False)

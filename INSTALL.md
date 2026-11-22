@@ -13,11 +13,11 @@ sudo apt update
 sudo apt install python3 python3-tk unzip
 ```
 
-Download `Pocket-Editor-2026.11.20.zip` from the release page, then run:
+Download `Pocket-Editor-2026.11.22.zip` from the release page, then run:
 
 ```sh
-unzip Pocket-Editor-2026.11.20.zip
-cd Pocket-Editor-2026.11.20
+unzip Pocket-Editor-2026.11.22.zip
+cd Pocket-Editor-2026.11.22
 python3 -B pocket_editor.py
 ```
 
@@ -57,3 +57,7 @@ The core editor requires no pip packages. PHP tools require Node.js/npm and `npm
 - SourceForge project: https://sourceforge.net/projects/pocket-editor/
 
 For bug reports, include your operating system, Python version, reproduction steps, and error message. Remove credentials and invitation keys before sharing logs.
+
+## Linux keyboard compatibility
+
+The local editor automatically uses local Compose for the affected Tk 8.6 + IBus/Fcitx combination. If you need an external IME, launch `python3 -B pocket_editor.py --input-method system` or choose **system** under Preferences → Keyboard input and restart. See [keyboard input notes](docs/GUI.md#linux-keyboard-input-and-undo-redo).

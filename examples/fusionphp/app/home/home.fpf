@@ -1,0 +1,13 @@
+{% extends "main" %}
+{% block content %}
+    <h1>{{ default title 'Welcome' }}</h1>
+    {% if showLinks %}
+        <ul>
+            {% for item in links %}
+                <li><a href="{{ url item.url }}">{{ item.title }}</a></li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No links to show.</p>
+    {% endif %}
+{% endblock %}

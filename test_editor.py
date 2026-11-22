@@ -435,7 +435,7 @@ class EditorTests(unittest.TestCase):
     def test_black_service_and_undo(self):
         e=self.editor; e.set_document(self.folder/'sample.py','x=  [1,2,3]\n')
         e.plugin_apis['word_count'].call_service('python_tools.format')
-        self.pump(1.5)
+        self.until(lambda:e.plugin_apis['word_count'].get_text()=='x = [1, 2, 3]\n')
         self.assertEqual(e.plugin_apis['word_count'].get_text(),'x = [1, 2, 3]\n')
         e.buffer.event_generate('<<Undo>>'); self.pump()
         self.assertEqual(e.plugin_apis['word_count'].get_text(),'x=  [1,2,3]\n')

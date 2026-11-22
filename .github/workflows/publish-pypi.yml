@@ -38,7 +38,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: python -B -m unittest -v test_git_executable test_ai_assistant.ProtocolTests test_ai_assistant.GeminiTests test_codex_loading.CodexRunnerTests test_cpp_tools.BackendTests
+      - run: python -B -m unittest -v test_git_executable test_ai_assistant.ProtocolTests test_ai_assistant.GeminiTests test_codex_loading.CodexRunnerTests test_cpp_tools.BackendTests test_windows_editing test_keyboard_input
   publish:
     if: inputs.publish && github.ref == 'refs/heads/main'
     needs: [build, windows-compatibility]

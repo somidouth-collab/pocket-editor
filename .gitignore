@@ -24,3 +24,9 @@ project_explorer_settings.json
 # C/C++ tool preferences and local debug builds
 cpp_tools_settings.json
 .pocket-debug/
+
+# Local FusionPHP template preferences
+fusionphp_tools_settings.json
+
+# Local FusionPHP editor preferences
+fusionphp_tools_settings.json

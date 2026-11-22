@@ -14,7 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_DOCS = {'README.md','TEAM_WORK.md','PLUGIN_DEVELOPMENT.md','AUTHOR.md','RELEASE_NOTES.md','PUBLISHING.md','INSTALL.md','PYPI_PUBLISHING.md','LICENSE','LICENSE.md','.gitignore'}
 CORE_MODULES = {'pocket_editor.py','editor_about.py','editor_session.py','command_palette.py','quick_open.py','split_editor.py','plugin_manager.py','plugin_sidebar.py'}
-EXTENSIONS = {'.c','.cc','.cpp','.cxx','.h','.hpp','.py','.md','.html','.css','.js','.cjs','.mjs','.php','.json','.txt','.png','.svg','.toml','.in','.yml','.yaml'}
+EXTENSIONS = {'.fpf','.c','.cc','.cpp','.cxx','.h','.hpp','.py','.md','.html','.css','.js','.cjs','.mjs','.php','.json','.txt','.png','.svg','.toml','.in','.yml','.yaml'}
 SKIP_DIRS = {'.git','__pycache__','node_modules','cache','dist','build','audit','old','testp','.venv','venv'}
 
 

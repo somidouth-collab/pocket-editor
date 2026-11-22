@@ -1,3 +1,20 @@
+# Pocket Editor — 2026.11.22
+
+Created by **Somi Douth** · somidouth@gmail.com
+
+- Fixed Windows clipboard Paste with and without a selection, and empty Undo/Redo. Native Tk errors stay within Tcl event handling.
+- Fixed Copy, Cut, and Clear with no selection and Edit-menu actions targeting the wrong focused text field.
+- Suppressed Windows console flashes during Python formatting.
+- Added FusionPHP Tools for .fpf templates: theme-aware syntax colors, formatting, autocomplete, syntax checking, and red zigzag error marks. Includes offline examples and Help.
+- Added Linux Tk input-method compatibility settings to avoid XIM fabricated-key warnings while preserving a system input-method option.
+- Expanded clipboard, undo, focus, and keyboard regression coverage and Windows CI checks.
+
+Validation: 73 local tests passed. Native Windows desktop CI is required before PyPI publication; Windows 10 manual verification remains outstanding. FusionPHP checks use the local framework grammar. No external AI generation requests were made.
+
+Upgrade with `pipx upgrade pocket-editor`, then restart. Runtime folders are version-specific; existing drafts and settings remain in the previous version folder. License remains undecided.
+
+---
+
 # Pocket Editor — 2026.11.20
 
 Created by **Somi Douth** · somidouth@gmail.com

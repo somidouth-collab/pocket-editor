@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <title>{{ default title 'FusionPHP example' }}</title>
+    </head>
+    <body>
+        <main>
+            {% yield content %}
+        </main>
+    </body>
+</html>
