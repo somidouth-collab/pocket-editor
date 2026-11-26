@@ -86,7 +86,14 @@ class DocumentContextTests(unittest.TestCase):
         text=self.editor.buffer.widget
         self.root.update()
         event=SimpleNamespace(widget=text,x=5,y=5,x_root=text.winfo_rootx()+5,y_root=text.winfo_rooty()+5)
-        self.editor.document_context(event);self.root.update()
-        old=self.editor.document_context_menu;old.unpost();self.root.update()
+        if self.root.tk.call('tk', 'windowingsystem') == 'win32':
+            # TrackPopupMenu blocks until human input on Windows. Exercise the
+            # same registered dismissal handler with a controlled native grab.
+            old=self.popup()
+            old.grab_set()
+            old.event_generate('<Unmap>');self.root.update()
+        else:
+            self.editor.document_context(event);self.root.update()
+            old=self.editor.document_context_menu;old.unpost();self.root.update()
         self.assertIsNone(self.root.grab_current())
         self.popup();self.assertFalse(old.winfo_exists())
