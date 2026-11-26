@@ -1,3 +1,19 @@
+# Pocket Editor — 2026.11.26
+
+Created by **Somi Douth** · somidouth@gmail.com
+
+- Added explicit document shortcuts and Edit-menu hints for Copy, Cut, Paste, Select All, Undo and Redo; both Ctrl+Y and Ctrl+Shift+Z redo. Select All excludes Tk’s internal trailing newline, and Paste replaces selected document text consistently.
+- Added shortcuts for line editing, Go to Line, tab switching, zoom and plugin Search & Replace.
+- Routed Find/Replace and next/previous search shortcuts through the Search & Replace plugin.
+- Added the complete Search & Replace interface to a scrollable vertical tab, plus an optional separate window sharing its inputs and options.
+- Added persistent 40–100% opacity for the separate search window; editor and dock opacity remain unchanged.
+- Added a themed document right-click menu with clipboard actions, history, search, line operations, Save, Copy File Path and Close File. Menus preserve selected text, target the clicked split pane, disable unavailable actions and support Shift+F10.
+- Expanded GUI regression coverage and Windows CI checks; updated local Help.
+
+Upgrade with `pipx upgrade pocket-editor`, then restart. Runtime folders are version-specific; previous drafts and settings remain in the previous version folder. Windows CI uses a hosted Windows runner; Windows 10 manual verification remains outstanding. License remains undecided.
+
+---
+
 # Pocket Editor — 2026.11.22
 
 Created by **Somi Douth** · somidouth@gmail.com

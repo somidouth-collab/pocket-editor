@@ -118,8 +118,10 @@
 <p><a href="../pocket_editor_plugins/rich_text.py">View source</a></p>
 <h2 id="search_replace">search_replace</h2>
 <p>Find and replace with previous/next navigation, regex options, and bounded regex execution in a disposable process.</p>
-<p><strong>How to use:</strong> Open Search &amp; Replace, enter the search and optional replacement, choose case/regex options, then use Next or Previous. Replace selects the next match before replacing if no matching active result is selected; Replace All works on the active document. Regex replacements support capture references. Invalid expressions and bounded-search failures are shown without replacing the document.</p>
-<p>Commands: <code>Search &amp; Replace</code>.</p>
+<p><strong>How to use:</strong> Ctrl+F/Ctrl+H and Edit Find/Replace open the complete Search &amp; Replace vertical panel. Ctrl+G/F3 finds next; Ctrl+Shift+G/Shift+F3 finds previous. Open separate window uses the same inputs and options in a floating GUI; Use vertical tab returns to the dock. Window opacity (40–100%) applies only to the separate window and persists locally. The dock scrolls vertically. Enter the search and optional replacement, choose case/regex options, then use Next or Previous. Replace selects the next match before replacing if no matching active result is selected; Replace All works on the active document. Regex replacements support capture references. Invalid expressions and bounded-search failures are shown without replacing the document.</p>
+<p>Commands: <code>Search &amp; Replace</code>, <code>Search &amp; Replace — Separate Window</code>.</p>
+<p>Services: <code>search_replace.show</code>, <code>search_replace.next</code>, <code>search_replace.previous</code>.</p>
+<p>Subscribed events: <code>document_switched</code>.</p>
 <p>Published events: <code>document_changed</code>.</p>
 <p><a href="../pocket_editor_plugins/search_replace.py">View source</a></p>
 <h2 id="team_project">team_project</h2>

@@ -8,7 +8,7 @@ Click the gear at the bottom of the left rail, or use **Settings → Vertical pl
 
 Click a vertical tab to show its panel. Click it again, or the panel's ×, to collapse it and give the editor more space. Drag the divider to resize. Hover or keyboard-focus a tab to see its full name; Tab and Enter/Space also work. The rail scrolls with the mouse wheel when many tabs are selected.
 
-Project Explorer, AI Assistant, Codex, Git, Terminal, and Team Project support docked panels. Switching tabs preserves each panel's input and running work. Existing standalone windows remain usable; selecting their tab offers their commands rather than duplicating a running tool. Other plugins show an action list, and actions run only when explicitly clicked. Simply selecting Python Tools or a text-transform plugin does not change your document.
+Project Explorer, Search & Replace, AI Assistant, Codex, Git, Terminal, and Team Project support docked panels. Switching tabs preserves each panel's input and running work. Existing standalone windows remain usable; selecting their tab offers their commands rather than duplicating a running tool. Other plugins show an action list, and actions run only when explicitly clicked. Simply selecting Python Tools or a text-transform plugin does not change your document.
 
 The menu bar’s Plugins button opens a fixed-size, themed window with vertical scrolling. Select a plugin to see its actions, or right-click a vertical tab. Escape closes the window. The horizontal plugin toolbar has been removed. Plugin and document tabs have separate purposes: document tabs select files, and vertical tabs select tools.
 
@@ -99,3 +99,47 @@ py pocket_editor.py
 ```
 
 The local publishing workflow includes these GUI checks in its Windows job for the next authorized publication. No workflow has been uploaded or run remotely for these local changes.
+
+## Document keyboard shortcuts
+
+Use Ctrl+C to Copy, Ctrl+X to Cut, Ctrl+V to Paste, Ctrl+A to Select All, Ctrl+Z to Undo, and Ctrl+Y or Ctrl+Shift+Z to Redo. On macOS use Command instead of Ctrl. These shortcuts act on the focused document, including newly opened tabs and split panes. The Edit menu displays the primary shortcuts. Empty Undo/Redo is harmless.
+
+Additional shortcuts (Ctrl becomes Command on macOS):
+
+| Action | Shortcut |
+| --- | --- |
+| New / Open / Save | Ctrl+N / Ctrl+O / Ctrl+S |
+| Save As / Save All | Ctrl+Shift+S / Ctrl+Shift+A |
+| Close document / Exit | Ctrl+W / Ctrl+Q |
+| Quick Open / Command Palette | Ctrl+P / Ctrl+Shift+P |
+| Find / Find Next | Ctrl+F / Ctrl+G or F3 |
+| Search & Replace | Ctrl+H (Search & Replace plugin) |
+| Go to Line | Ctrl+L (Editor Commands plugin) |
+| Next / Previous tab | Ctrl+Tab / Ctrl+Shift+Tab |
+| Next / Previous tab alternative | Ctrl+PageDown / Ctrl+PageUp |
+| Duplicate line or selected lines | Ctrl+D |
+| Move lines up / down | Alt+Up / Alt+Down |
+| Delete lines | Ctrl+Shift+K |
+| Close other tabs | Ctrl+Alt+W |
+| Zoom in / out / reset | Ctrl++ or Ctrl+= / Ctrl+- / Ctrl+0 |
+| Help | F1 |
+
+Tab navigation, line operations, and zoom shortcuts require the Editor Commands plugin. Standard arrow, Home/End, Ctrl+Home/End, Shift selection, and Ctrl+Left/Right word navigation use native text bindings. Document shortcuts apply while a document has keyboard focus; input fields keep their own native editing behavior.
+
+## Search & Replace: vertical tab or separate window
+
+Ctrl+F and Ctrl+H (Command on macOS) open the Search & Replace plugin in its vertical tab. The Edit menu Find and Replace actions use this same plugin. Ctrl+G or F3 finds the next match; Ctrl+Shift+G or Shift+F3 finds the previous match. If the plugin is disabled, enable it in Plugin Manager. The old separate core Find dialog is no longer used.
+
+The vertical panel contains both inputs, regular-expression and case options, Previous/Next, Replace, Replace All, status, and window opacity. Resize its divider or use its vertical scrollbar to reach all controls. Enter finds the next match and Shift+Enter the previous match while an input is focused. Searches wrap at the document boundaries.
+
+Click **Open separate window**, or choose **Search & Replace — Separate Window** from the plugin menu, to use a floating search GUI. **Use vertical tab** closes that window and returns to the dock. Both views share the same search text, replacement, options, and result status. Replacements target the active document and can be undone.
+
+**Window opacity** ranges from 40% to 100%; 100% is solid. Changes affect only the separate Search & Replace window, never the editor or dock. Release the slider or use its keyboard controls to save the value in `search_replace_settings.json`. Window managers without alpha support may ignore transparency or report it unavailable. No search text or document content is saved in that settings file.
+
+## Document right-click menu
+
+Right-click inside a document for Undo/Redo, Cut, Copy, Paste, Delete Selection, Select All, Find/Replace, Save, Copy File Path, and Close File. When Editor Commands is enabled, the same menu includes Duplicate Line/Selection, Delete Lines, and Move Lines Up/Down. Find/Replace opens the Search & Replace plugin.
+
+Right-click inside a selection preserves it. Clicking elsewhere moves the caret and clears the selection without editing the text. Split panes use the document you actually clicked. Actions that need a selection, undo history, a saved path, or an enabled plugin are disabled when unavailable. Closing a file retains the normal unsaved-change prompt.
+
+Shift+F10 or the Menu key opens the same menu at the caret without changing the selection. macOS also supports Control-click. Escape dismisses the menu. Existing Project Explorer item menus remain available.

@@ -348,10 +348,10 @@ class EditorTests(unittest.TestCase):
     def test_search_ui_unicode_zero_length_replacement_undo(self):
         e = self.editor
         e.set_document(None, '😀 café café')
-        self.command('Search & Replace')
+        self.command('Search & Replace — Separate Window')
         window = self.window('Search and Replace')
-        self.set_entry(self.entry(window, 0), 'café')
-        self.set_entry(self.entry(window, 1), 'tea')
+        self.set_entry(self.entry(window, 1), 'café')
+        self.set_entry(self.entry(window, 3), 'tea')
         self.button('Next')
         self.assertEqual(e.buffer.get('sel.first', 'sel.last'), 'café')
         self.button('Replace')
@@ -360,14 +360,14 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(e.plugin_apis['word_count'].get_text(), '😀 café café')
         for w in widgets(window):
             if isinstance(w, ttk.Checkbutton) and w.cget('text') == 'Regular expression': w.invoke()
-        self.set_entry(self.entry(window, 0), '(?=café)')
+        self.set_entry(self.entry(window, 1), '(?=café)')
         self.button('Next'); first=e.buffer.index('insert')
         self.button('Next'); self.assertNotEqual(first, e.buffer.index('insert'))
-        self.set_entry(self.entry(window, 0), '(café)')
-        self.set_entry(self.entry(window, 1), r'\2')
+        self.set_entry(self.entry(window, 1), '(café)')
+        self.set_entry(self.entry(window, 3), r'\2')
         before=e.plugin_apis['word_count'].get_text(); self.button('Replace All')
         self.assertEqual(e.plugin_apis['word_count'].get_text(), before)
-        self.set_entry(self.entry(window, 1), r'<\1>'); self.button('Replace All')
+        self.set_entry(self.entry(window, 3), r'<\1>'); self.button('Replace All')
         self.assertEqual(e.plugin_apis['word_count'].get_text(), '😀 <café> <café>')
         start=time.monotonic()
         with self.assertRaises(ValueError):

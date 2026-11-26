@@ -123,3 +123,24 @@ def register(api):
         ('Reset Zoom', zoom),
     ):
         api.add_command(label, callback)
+
+    shortcuts = {
+        'Duplicate Line / Selection': ('Control-d',),
+        'Move Lines Up': ('Alt-Up',),
+        'Move Lines Down': ('Alt-Down',),
+        'Delete Lines': ('Control-Shift-K',),
+        'Go to Line…': ('Control-l',),
+        'Next Tab': ('Control-Tab', 'Control-Next'),
+        'Previous Tab': ('Control-Shift-Tab', 'Control-ISO_Left_Tab', 'Control-Prior'),
+        'Close Other Tabs': ('Control-Alt-w',),
+        'Zoom In': ('Control-plus', 'Control-equal'),
+        'Zoom Out': ('Control-minus',),
+        'Reset Zoom': ('Control-0',),
+    }
+    for label, callback in api._commands:
+        for shortcut in shortcuts.get(label, ()):
+            if editor.modifier == 'Command':
+                shortcut = shortcut.replace('Control-', 'Command-')
+            sequence = f'<{shortcut}>'
+            binding = editor.buffer.bind(sequence, lambda _event, callback=callback: callback() or 'break')
+            api.on_cleanup(lambda sequence=sequence, binding=binding: editor.buffer.unbind(sequence, binding))

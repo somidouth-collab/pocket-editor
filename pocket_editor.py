@@ -314,6 +314,7 @@ class Editor:
         self.newline = "\n"
         self.bom = False
         self.needle = ""
+        self.document_context_menu = None
         self.loaded_plugins = set()
         self.plugin_apis = {}
         self.command_palette = CommandPalette(self)
@@ -558,16 +559,21 @@ class Editor:
         ):
             self.shortcut(files, label, action, key)
         self.root.bind(f"<{self.modifier}-p>", lambda event: self.quick_open.show() or "break")
-        for label, event in (
-            ("Undo", "Undo"), ("Redo", "Redo"), ("Cut", "Cut"),
-            ("Copy", "Copy"), ("Paste", "Paste"), ("Select All", "SelectAll"),
+        for label, event, key in (
+            ("Undo", "Undo", "z"), ("Redo", "Redo", "y"), ("Cut", "Cut", "x"),
+            ("Copy", "Copy", "c"), ("Paste", "Paste", "v"), ("Select All", "SelectAll", "a"),
         ):
-            edit.add_command(label=label, command=lambda event=event:self.edit_event(event))
+            self.shortcut(edit, label, lambda event=event:self.edit_event(event), key)
+        self.buffer.bind(f"<{self.modifier}-Shift-Z>",
+                         lambda _event:self.edit_event("Redo") or "break")
         edit.add_separator()
         self.shortcut(edit, "Command Palette…", self.command_palette.show, "Shift-p")
         self.root.bind(f"<{self.modifier}-Shift-P>", lambda event: self.command_palette.show() or "break")
         self.shortcut(edit, "Find…", self.find, "f")
+        self.shortcut(edit, "Replace…", self.find, "h")
         self.shortcut(edit, "Find Next", self.find_next, "g")
+        self.buffer.bind("<F3>", lambda _event:self.find_next() or "break")
+        self.buffer.bind("<F1>", lambda _event:self.show_documentation() or "break")
         for label, callback in (("Split Editor Right", self.split_editor.enable),
                                 ("Focus Other Pane", self.split_editor.other),
                                 ("Close Split", self.split_editor.close)):
@@ -590,17 +596,110 @@ class Editor:
         self.plugins.add_command(label="Load New Plugins", command=self.load_plugins)
         self.plugins.add_separator()
 
-    def edit_event(self, event):
-        """Edit the focused text field; fall back to the active document."""
+    def edit_event(self, event, target=None):
+        """Edit a supplied document or the focused text field."""
         if self.closing:return
-        try:
-            target=self.root.focus_get()
-            if target is None or target.winfo_class() not in ("Text","Entry","TEntry","Spinbox","TSpinbox","TCombobox"):
+        if target is None:
+            try:
+                target=self.root.focus_get()
+                if target is None or target.winfo_class() not in ("Text","Entry","TEntry","Spinbox","TSpinbox","TCombobox"):
+                    target=self.buffer.widget
+            except (tk.TclError,KeyError):
+                # Native/cloned menus need not have a Python widget wrapper.
                 target=self.buffer.widget
-        except (tk.TclError,KeyError):
-            # Native/cloned menus need not have a Python widget wrapper.
-            target=self.buffer.widget
+        if event == "SelectAll" and isinstance(target, DocumentText):
+            # Tk's final newline is a widget sentinel, not document content.
+            target.tag_add("sel", "1.0", "end-1c")
+            target.mark_set("insert", "end-1c")
+            target.see("insert")
+            return
+        if event == "Paste" and isinstance(target, DocumentText) and target.tag_ranges("sel"):
+            try:
+                content = target.clipboard_get()
+            except tk.TclError:
+                return
+            target.edit_separator()
+            target.replace("sel.first", "sel.last", content)
+            target.tag_remove("sel", "1.0", "end")
+            target.edit_separator()
+            return
         target.event_generate(f"<<{event}>>")
+
+    def document_context(self, event, keyboard=False):
+        """Open an editing menu for the exact clicked document, including split views."""
+        if self.closing:return "break"
+        document = next((item for item in self.documents if item["widget"] is event.widget), None)
+        if document is None:return "break"
+        self.select_document(document)
+        text = document["widget"]
+        text.focus_set()
+        if not keyboard:
+            index = text.index(f"@{event.x},{event.y}")
+            selection = text.tag_ranges("sel")
+            if not selection or not (text.compare(selection[0], "<=", index) and text.compare(index, "<", selection[-1])):
+                text.tag_remove("sel", "1.0", "end")
+                text.mark_set("insert", index)
+        if self.document_context_menu is not None:
+            self.document_context_menu.destroy()
+        menu = self.document_context_menu = tk.Menu(self.root, tearoff=False,
+            background='#19212a', foreground='#d1dae4', activebackground='#234462',
+            activeforeground='white', disabledforeground='#73818d', borderwidth=1,
+            relief='solid', font=self.ui_font)
+        modifier = 'Cmd' if self.modifier == 'Command' else 'Ctrl'
+        editable = str(text.cget('state')) == 'normal'
+        selected = bool(text.tag_ranges('sel'))
+        def invoke(callback):
+            if self.closing or document not in self.documents:return
+            self.select_document(document);text.focus_set()
+            callback()
+        def add(label, callback, enabled=True, key=''):
+            menu.add_command(label=label, command=lambda:invoke(callback),
+                             state='normal' if enabled else 'disabled', accelerator=key.replace('Ctrl', modifier))
+        for label, operation, enabled, key in (
+            ('Undo', 'Undo', editable and text.tk.getboolean(text.tk.call(str(text), "edit", "canundo")), 'Ctrl+Z'),
+            ('Redo', 'Redo', editable and text.tk.getboolean(text.tk.call(str(text), "edit", "canredo")), 'Ctrl+Y'),
+        ):add(label, lambda operation=operation:self.edit_event(operation, text), enabled, key)
+        menu.add_separator()
+        for label, operation, enabled, key in (
+            ('Cut', 'Cut', editable and selected, 'Ctrl+X'),
+            ('Copy', 'Copy', selected, 'Ctrl+C'),
+            ('Paste', 'Paste', editable, 'Ctrl+V'),
+            ('Delete Selection', 'Clear', editable and selected, 'Delete'),
+        ):add(label, lambda operation=operation:self.edit_event(operation, text), enabled, key)
+        add('Select All', lambda:self.edit_event('SelectAll', text), text.compare('end-1c', '>', '1.0'), 'Ctrl+A')
+        menu.add_separator()
+        search = self.plugin_apis.get('search_replace')
+        add('Find…', self.find, search is not None and 'show' in search._services, 'Ctrl+F')
+        add('Replace…', self.find, search is not None and 'show' in search._services, 'Ctrl+H')
+        provider = self.plugin_apis.get('editor_commands')
+        if provider is not None:
+            commands = dict(provider._commands)
+            menu.add_separator()
+            for label, key in (('Duplicate Line / Selection', 'Ctrl+D'), ('Delete Lines', 'Ctrl+Shift+K'),
+                               ('Move Lines Up', 'Alt+Up'), ('Move Lines Down', 'Alt+Down')):
+                if label in commands:
+                    add(label, lambda callback=commands[label]:self.run_plugin('editor_commands', callback), editable, key)
+        menu.add_separator()
+        add('Save', self.save, key='Ctrl+S')
+        def copy_path():
+            self.root.clipboard_clear();self.root.clipboard_append(str(self.path))
+        add('Copy File Path', copy_path, self.path is not None)
+        add('Close File', lambda:self.close_document(document), key='Ctrl+W')
+        def release(_event=None):
+            try:menu.grab_release()
+            except tk.TclError:pass
+        menu.bind('<Unmap>', release)
+        if keyboard:
+            box = text.bbox('insert')
+            x = text.winfo_rootx() + (box[0] if box else 12)
+            y = text.winfo_rooty() + (box[1]+box[3] if box else 24)
+        else:x, y = event.x_root, event.y_root
+        try:menu.tk_popup(x+3, y+3)
+        except tk.TclError:
+            release()
+            raise
+        self.refresh()
+        return "break"
 
     def shortcut(self, menu, label, action, key):
         display_key = key.upper().replace("SHIFT-", "Shift+")
@@ -674,6 +773,13 @@ class Editor:
         label.bind("<Button-1>", lambda event: self.select_document(document))
         document.update(tab=tab, label=label, close=close, accent=accent)
         document["widget"].bind("<FocusIn>", lambda event: self.select_document(document))
+        widget = document["widget"]
+        widget.bind("<Button-3>", self.document_context)
+        if self.modifier == 'Command':
+            widget.bind("<Button-2>", self.document_context)
+            widget.bind("<Control-Button-1>", self.document_context)
+        for sequence in ("<Shift-F10>", "<KeyPress-Menu>"):
+            widget.bind(sequence, lambda event:self.document_context(event, keyboard=True))
 
     def remember_document(self):
         self.active_document.update(path=self.path, newline=self.newline,
@@ -1006,34 +1112,18 @@ class Editor:
         if self.line_numbers.get():
             self.split_editor.draw_gutters()
 
+    def search_plugin(self, service):
+        provider = self.plugin_apis.get("search_replace")
+        if provider is None or service not in provider._services:
+            messagebox.showinfo("Search & Replace", "Enable the Search & Replace plugin in Plugin Manager.", parent=self.root)
+            return
+        self.run_plugin("search_replace", provider._services[service])
+
     def find(self):
-        selection = self.buffer.tag_ranges("sel")
-        initial = self.buffer.get(*selection) if selection else self.needle
-        needle = simpledialog.askstring("Find", "Find text (case sensitive)",
-                                         initialvalue=initial, parent=self.root)
-        if needle:
-            self.needle = needle
-            self.find_next()
+        self.search_plugin("show")
 
     def find_next(self):
-        if not self.needle:
-            return
-        selection = self.buffer.tag_ranges("sel")
-        start = selection[-1] if selection else "insert"
-        count = tk.IntVar(master=self.root)
-        match = self.buffer.search(self.needle, start, stopindex="end-1c",
-                                   exact=True, count=count)
-        if not match:
-            match = self.buffer.search(self.needle, "1.0", stopindex=start,
-                                       exact=True, count=count)
-        if not match:
-            self.root.bell()
-            return
-        self.buffer.tag_remove("sel", "1.0", "end")
-        self.buffer.tag_add("sel", match, f"{match}+{count.get()}c")
-        self.buffer.mark_set("insert", match)
-        self.buffer.see(match)
-        self.refresh()
+        self.search_plugin("next")
 
     def show_plugin_folder(self):
         try:

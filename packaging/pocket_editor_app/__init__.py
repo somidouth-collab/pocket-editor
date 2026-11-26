@@ -1,2 +1,2 @@
 """Pocket Editor desktop application distribution."""
-__version__ = "2026.11.22"
+__version__ = "2026.11.26"
