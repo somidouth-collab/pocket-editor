@@ -1,13 +1,13 @@
 """Real document keyboard shortcuts, clipboard, history, and tab routing."""
-from test_command_palette import PaletteTests
+import test_command_palette as fixtures
 
 
 import unittest
 
 
 class DocumentShortcutTests(unittest.TestCase):
-    setUp = PaletteTests.setUp
-    tearDown = PaletteTests.tearDown
+    setUp = fixtures.PaletteTests.setUp
+    tearDown = fixtures.PaletteTests.tearDown
     # Reuse only the isolated editor fixture, not its tests.
     def key(self, key):
         self.editor.buffer.focus_force();self.root.update()
