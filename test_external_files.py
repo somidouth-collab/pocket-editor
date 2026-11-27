@@ -100,7 +100,7 @@ class ExternalFileTests(unittest.TestCase):
         self.editor.buffer.insert('end-1c','draft')
         snapshot=EditorSession(self.editor,self.folder/'session.json').snapshot()
         item=snapshot['documents'][snapshot['active']]
-        self.assertEqual(item['disk_digest'],hashlib.sha256(b'original\n').hexdigest())
+        self.assertEqual(item['disk_digest'],hashlib.sha256(self.path.read_bytes()).hexdigest())
         self.assertIn('draft',item['text'])
 
     def test_closed_document_ignores_pending_result(self):
