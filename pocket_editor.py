@@ -23,6 +23,7 @@ from command_palette import CommandPalette
 from quick_open import QuickOpen
 from plugin_manager import PluginManager
 from split_editor import SplitEditor
+from external_files import ExternalFiles
 from editor_about import AboutDialog
 from plugin_sidebar import PluginSidebar, DEFAULT_PINS
 
@@ -395,6 +396,7 @@ class Editor:
         self.buffer.bind("<ButtonRelease-1>", self.refresh)
         self.buffer.focus_set()
         self.refresh()
+        self.external_files = ExternalFiles(self, editor_host)
         if not safe_mode:
             available=[path for path in PLUGIN_DIR.glob('*.py') if not path.name.startswith('_') and path.stem not in self.disabled_plugins]
             if available:self._plugin_job=root.after(20,lambda:self.load_plugins(background=True))
@@ -813,7 +815,7 @@ class Editor:
             background = "#10151b" if active else "#19212a"
             foreground = "#e5c07b" if dirty else "#ffffff" if active else "#bdbdbd"
             document["tab"].configure(background=background)
-            document["label"].configure(text=("●  " if dirty else "") + title,
+            document["label"].configure(text=("↻  " if document.get("external_changed") else "") + ("●  " if dirty else "") + title,
                                          background=background, foreground=foreground)
             document["close"].configure(background=background, foreground="#dddddd" if active else "#8e9ba9")
             document["accent"].configure(background="#1597f5" if active else "#27323d")
@@ -922,6 +924,7 @@ class Editor:
         if self.path is not None or self.buffer.get("1.0", "end-1c") or self.buffer.edit_modified() or self.rich_dirty:
             self.new()
         self.set_document(path, content, newline, data.startswith(codecs.BOM_UTF8))
+        self.external_files.track(self.active_document, data=data)
 
     def save_as(self):
         name = filedialog.asksaveasfilename(
@@ -939,6 +942,7 @@ class Editor:
                document["path"].resolve() == path.resolve() for document in self.documents):
             messagebox.showerror("Save failed", "This file is already open in another tab.", parent=self.root)
             return False
+        if not self.external_files.before_save(path):return False
         content = self.buffer.get("1.0", "end-1c").replace("\n", self.newline)
         try:
             data = content.encode("utf-8-sig" if self.bom else "utf-8")
@@ -947,6 +951,8 @@ class Editor:
             messagebox.showerror("Save failed", str(error), parent=self.root)
             return False
         self.path = path
+        self.active_document['path'] = path
+        self.external_files.track(self.active_document, data=data)
         self.document_changed()
         self.buffer.edit_modified(False)
         self.refresh()
@@ -975,6 +981,7 @@ class Editor:
             self.select_document(previous)
             if not self.save_settings():return
         self.closing = True
+        self.external_files.close()
         self.quick_open.close()
         self.plugin_sidebar.cleanup()
         for api in reversed(tuple(self.plugin_apis.values())):
@@ -988,8 +995,8 @@ class Editor:
             script = self.root.tk.call("after", "info", job)[0]
             command = self.root.tk.splitlist(script)[0]
             owner = next((widget for widget in owners
-                          if command in (widget._tclCommands or ())), self.root)
-            owner.after_cancel(job)
+                          if command in (widget._tclCommands or ())), None)
+            if owner is not None:owner.after_cancel(job)
         self.root.destroy()
 
     def apply_settings(self):

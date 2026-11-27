@@ -56,23 +56,27 @@ class TerminalGuiTests(unittest.TestCase):
         terminal.register(self.api)
         self.editor.plugin_apis['project_terminal'] = self.api
         dict(self.api._commands)['Project Terminal']()
-        self.root.update()
-        self.window = next(widget for widget in self.root.winfo_children() if isinstance(widget, tk.Toplevel))
+        deadline=time.monotonic()+4
+        while ('project_terminal' not in self.editor.plugin_sidebar.hosts or 'project_terminal' in self.editor.plugin_sidebar.pending) and time.monotonic()<deadline:
+            self.root.update();time.sleep(.01)
+        self.window = self.editor.plugin_sidebar.hosts['project_terminal']._panel_widget
+        self.output = next(widget for widget in children(self.window) if isinstance(widget,tk.Text) and getattr(widget,'_terminal_role','')=='runner')
 
     def tearDown(self):
         try: fixtures.PaletteTests.tearDown(self)
         finally: self.settings_patch.stop()
 
     def button(self, label, parent=None):
+        if label=='Settings…' and parent is None:
+            from types import SimpleNamespace
+            return SimpleNamespace(invoke=self.api._services['appearance'])
         return next(widget for widget in children(parent or self.window) if isinstance(widget, ttk.Button) and widget.cget('text') == label)
 
     def test_semantic_process_output_and_ansi_precedence(self):
         script = core.PLUGIN_DIR / 'categories.py'
         script.write_text('import sys\nsys.stdout.write("USER: input\\nSYSTEM: starting\\nWARNING: old option\\nERROR: bad argument\\nSUCCESS: done\\n\\x1b[34mERROR: explicitly blue\\x1b[0m\\n")\n')
-        command = next(widget for widget in children(self.window) if isinstance(widget, ttk.Entry) and widget.grid_info().get('row') == 1)
-        command.insert(0, f'"{sys.executable}" "{script}"')
-        self.button('Run').invoke()
-        output = next(widget for widget in children(self.window) if isinstance(widget, tk.Text))
+        self.api._services['run_command'](f'"{sys.executable}" "{script}"',str(core.PLUGIN_DIR))
+        output = self.output
         deadline = time.monotonic() + 5
         while '[Exit code 0]' not in output.get('1.0', 'end') and time.monotonic() < deadline:
             self.root.update(); time.sleep(.02)
@@ -115,10 +119,8 @@ class TerminalGuiTests(unittest.TestCase):
     def test_process_colors_settings_persistence_and_disable(self):
         script = core.PLUGIN_DIR / 'colored.py'
         script.write_text('import sys\nsys.stdout.write("\\x1b[31mRED\\x1b[0m plain\\n")\n')
-        command = next(widget for widget in children(self.window) if isinstance(widget, ttk.Entry) and widget.grid_info().get('row') == 1)
-        command.insert(0, f'"{sys.executable}" "{script}"')
-        self.button('Run').invoke()
-        output = next(widget for widget in children(self.window) if isinstance(widget, tk.Text))
+        self.api._services['run_command'](f'"{sys.executable}" "{script}"',str(core.PLUGIN_DIR))
+        output = self.output
         deadline = time.monotonic() + 5
         while '[Exit code 0]' not in output.get('1.0', 'end') and time.monotonic() < deadline:
             self.root.update(); time.sleep(.02)

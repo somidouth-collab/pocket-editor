@@ -1,5 +1,6 @@
-"""Pocket Editor command runner. Commands use the system shell."""
+"""Interactive project terminal and command runner with one integrated menu bar."""
 from pocket_editor_plugins._docking import create_window
+from pocket_editor_plugins._terminal_view import InteractiveTerminal
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,11 @@ def register(api):
     status = None
     running = False
     poll_job = None
+    interactive = None
+    view_mode = None
+    runner_frame = None
+    command_dialog = None
+    shell_var = tk.StringVar(root, configs.get("_shell", "") if isinstance(configs.get("_shell", ""), str) else "")
 
     def project_directory():
         try:
@@ -71,6 +77,7 @@ def register(api):
                              font=bold_font if bold else terminal_font)
 
     def apply_appearance():
+        if interactive is not None:interactive.apply_appearance(appearance)
         available = set(font.families(root))
         family = appearance["font_family"]
         if family not in available:
@@ -159,6 +166,7 @@ def register(api):
     def cleanup():
         nonlocal poll_job
         shutting_down.set()
+        if interactive is not None:interactive.cleanup()
         if poll_job and window is not None and window.winfo_exists():
             window.after_cancel(poll_job)
             poll_job = None
@@ -201,6 +209,7 @@ def register(api):
             messagebox.showerror("Could not start command", str(error), parent=window)
             return
         running = True
+        view_mode.set('runner');display_mode()
         decoder = AnsiDecoder()
         append(f"\n{directory}\n", category="status")
         append(f"$ {command}\n", category="command")
@@ -248,6 +257,11 @@ def register(api):
 
     def destroy_window():
         nonlocal poll_job
+        if getattr(window,'_docked_panel',False):
+            if interactive is not None:interactive.stop()
+            window.withdraw()
+            return
+        if interactive is not None:interactive.cleanup()
         if poll_job:
             window.after_cancel(poll_job)
             poll_job = None
@@ -270,60 +284,128 @@ def register(api):
         else:
             destroy_window()
 
-    def show(parent=None):
-        nonlocal window, folder_var, command_var, output, status
-        if window is not None and window.winfo_exists():
-            window.deiconify()
-            window.lift()
-            return
-        window = create_window(root, parent)
-        window.title("Project Terminal")
-        window.geometry("840x480")
-        window.minsize(560, 320)
-        window.protocol("WM_DELETE_WINDOW", close)
-        body = ttk.Frame(window, padding=12)
-        body.pack(fill="both", expand=True)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(3, weight=1)
-        folder_var = tk.StringVar(window)
-        command_var = tk.StringVar(window)
-        status = tk.StringVar(window, "Ready.")
-        ttk.Label(body, text="Working directory").grid(row=0, column=0, padx=(0, 8), sticky="w")
-        ttk.Entry(body, textvariable=folder_var).grid(row=0, column=1, sticky="ew")
+    def display_mode():
+        if interactive is None:return
+        if view_mode.get()=='shell':
+            runner_frame.pack_forget();interactive.frame.pack(fill='both',expand=True);interactive.resize();interactive.text.focus_set()
+        else:
+            interactive.frame.pack_forget();runner_frame.pack(fill='both',expand=True)
+
+    def start_shell():
+        if api._editor.closing:return
+        if interactive is None or window is None or not window.winfo_exists():show();root.after(200,start_shell);return
+        view_mode.set('shell');display_mode();interactive.start(folder_var.get())
+
+    def run_command(command,directory=None):
+        if api._editor.closing:return
+        if folder_var is None or window is None or not window.winfo_exists():
+            show();root.after(200,lambda:run_command(command,directory));return
+        if directory:folder_var.set(str(directory))
+        command_var.set(command);run()
+
+    def command_settings():
+        nonlocal command_dialog
+        if window is None or not window.winfo_exists():show();root.after(200,command_settings);return
+        if command_dialog is not None and command_dialog.winfo_exists():command_dialog.lift();return
+        command_dialog=dialog=tk.Toplevel(window);dialog.title('Run Project Command');dialog.transient(window)
+        body=ttk.Frame(dialog,padding=14);body.pack(fill='both',expand=True);body.columnconfigure(1,weight=1)
+        ttk.Label(body,text='Working directory').grid(row=0,column=0,sticky='w',padx=6,pady=6)
+        ttk.Entry(body,textvariable=folder_var,width=44).grid(row=0,column=1,sticky='ew')
         def browse():
-            directory = filedialog.askdirectory(parent=window)
-            if directory:
-                load_project(directory)
-        ttk.Button(body, text="Browse…", command=browse).grid(row=0, column=2, padx=4)
-        ttk.Button(body, text="Current Project", command=lambda: load_project(
-            project_directory())).grid(row=0, column=3)
-        ttk.Label(body, text="Command").grid(row=1, column=0, pady=8, sticky="w")
-        entry = ttk.Entry(body, textvariable=command_var)
-        entry.grid(row=1, column=1, columnspan=3, sticky="ew", pady=8)
-        entry.bind("<Return>", lambda event: run())
-        actions = ttk.Frame(body)
-        actions.grid(row=2, column=0, columnspan=4, sticky="w", pady=(0, 8))
-        for label, callback in (("Run", run), ("Stop", stop), ("Save Project Command", save_config), ("Settings…", show_settings)):
-            ttk.Button(actions, text=label, command=callback).pack(side="left", padx=(0, 6))
-        output = tk.Text(body, wrap="none", font=terminal_font, background=appearance["background"],
-                         foreground=appearance["foreground"], borderwidth=0, padx=10, pady=8, state="disabled")
-        output.grid(row=3, column=0, columnspan=4, sticky="nsew")
-        scroll = ttk.Scrollbar(body, command=output.yview)
-        scroll.grid(row=3, column=4, sticky="ns")
-        output.configure(yscrollcommand=scroll.set)
-        ttk.Label(body, textvariable=status).grid(row=4, column=0, columnspan=4, sticky="w", pady=8)
-        ttk.Label(body, text="Uses the system shell. Output-only runner; interactive prompts are unsupported.").grid(
-            row=5, column=0, columnspan=4, sticky="w")
-        horizontal = ttk.Scrollbar(body, orient="horizontal", command=output.xview)
-        horizontal.grid(row=6, column=0, columnspan=4, sticky="ew")
-        output.configure(xscrollcommand=horizontal.set)
-        apply_appearance()
-        load_project(project_directory())
-        poll()
+            directory=filedialog.askdirectory(parent=dialog)
+            if directory:load_project(directory)
+        ttk.Button(body,text='Browse…',command=browse).grid(row=0,column=2,padx=5)
+        ttk.Button(body,text='Current Project',command=lambda:load_project(project_directory())).grid(row=1,column=1,sticky='w',pady=5)
+        ttk.Label(body,text='Command').grid(row=2,column=0,sticky='w',padx=6,pady=6)
+        entry=ttk.Entry(body,textvariable=command_var,width=44);entry.grid(row=2,column=1,columnspan=2,sticky='ew')
+        def execute():run();dialog.destroy()
+        entry.bind('<Return>',lambda event:execute());entry.focus_set()
+        actions=ttk.Frame(body);actions.grid(row=3,column=0,columnspan=3,sticky='ew',pady=10)
+        ttk.Button(actions,text='Run',command=execute).pack(side='right')
+        ttk.Button(actions,text='Save Project Command',command=save_config).pack(side='left')
+        ttk.Button(actions,text='Cancel',command=dialog.destroy).pack(side='right',padx=5)
+
+    def choose_directory():
+        directory=filedialog.askdirectory(parent=window,initialdir=folder_var.get())
+        if directory:load_project(directory);status.set('Directory selected. Restart Shell applies it to the shell.')
+
+    def shell_settings():
+        dialog=tk.Toplevel(window);dialog.title('Terminal Shell');dialog.transient(window)
+        body=ttk.Frame(dialog,padding=14);body.pack(fill='both',expand=True)
+        ttk.Label(body,text='Shell executable (blank uses the system shell)').pack(anchor='w')
+        value=tk.StringVar(dialog,shell_var.get());ttk.Entry(body,textvariable=value,width=54).pack(fill='x',pady=8)
+        def browse():
+            selected=filedialog.askopenfilename(parent=dialog,title='Choose shell executable')
+            if selected:value.set(selected)
+        ttk.Button(body,text='Browse…',command=browse).pack(anchor='w')
+        def save_shell():
+            shell_var.set(value.get().strip());configs['_shell']=shell_var.get()
+            try:api._editor.write_data(config_path,json.dumps(configs,indent=2).encode('utf-8'))
+            except OSError as error:messagebox.showerror('Shell settings',str(error),parent=dialog);return
+            status.set('Shell saved. New / Restart Shell applies the change.');dialog.destroy()
+        ttk.Button(body,text='Save',command=save_shell).pack(anchor='e',pady=10)
+
+    def active_text():return interactive.text if view_mode.get()=='shell' else output
+
+    def copy_selection():
+        text=active_text();selection=text.tag_ranges('sel')
+        if selection:root.clipboard_clear();root.clipboard_append(text.get(*selection))
+
+    def clear_view():
+        nonlocal decoder
+        if view_mode.get()=='shell':interactive.clear()
+        else:
+            output.configure(state='normal');output.delete('1.0','end');output.configure(state='disabled');decoder=AnsiDecoder()
+
+    def show(parent=None):
+        nonlocal window,folder_var,command_var,output,status,interactive,view_mode,runner_frame
+        if window is not None and window.winfo_exists():window.deiconify();window.lift();return window
+        if parent is None:
+            api._editor.plugin_sidebar.open(api.plugin_id);return
+        window=create_window(root,parent);window.title('Project Terminal');window.protocol('WM_DELETE_WINDOW',close)
+        folder_var=tk.StringVar(window);command_var=tk.StringVar(window);status=tk.StringVar(window,'Ready.')
+        view_mode=tk.StringVar(window,'shell')
+        menu_bar=ttk.Frame(window);menu_bar.pack(fill='x')
+        terminal_menu=tk.Menu(menu_bar,tearoff=False);edit_menu=tk.Menu(menu_bar,tearoff=False)
+        project_menu=tk.Menu(menu_bar,tearoff=False);settings_menu=tk.Menu(menu_bar,tearoff=False);view_menu=tk.Menu(menu_bar,tearoff=False)
+        for label,menu in (('Terminal',terminal_menu),('Edit',edit_menu),('Project',project_menu),('View',view_menu),('Settings',settings_menu)):
+            ttk.Menubutton(menu_bar,text=label,menu=menu).pack(side='left')
+        terminal_menu.add_command(label='New / Restart Shell',command=start_shell)
+        terminal_menu.add_command(label='Interrupt (Ctrl+C)',command=lambda:interactive.send('\x03'))
+        terminal_menu.add_command(label='Stop Shell',command=lambda:interactive.stop())
+        terminal_menu.add_separator();terminal_menu.add_command(label='Run Command…',command=command_settings)
+        terminal_menu.add_command(label='Run Saved Command',command=run)
+        terminal_menu.add_command(label='Stop Command',command=stop)
+        terminal_menu.add_separator();terminal_menu.add_command(label='Install / Repair Engine',command=lambda:interactive.install())
+        terminal_menu.add_command(label='Close Terminal',command=close)
+        edit_menu.add_command(label='Copy',command=copy_selection,accelerator='Ctrl+Shift+C')
+        edit_menu.add_command(label='Paste',command=lambda:interactive.paste() if view_mode.get()=='shell' else None,accelerator='Ctrl+Shift+V')
+        edit_menu.add_command(label='Select All',command=lambda:active_text().tag_add('sel','1.0','end-1c'))
+        edit_menu.add_command(label='Clear',command=clear_view)
+        project_menu.add_command(label='Choose Working Directory…',command=choose_directory)
+        project_menu.add_command(label='Use Current Project',command=lambda:load_project(project_directory()))
+        project_menu.add_command(label='Command Settings…',command=command_settings)
+        project_menu.add_command(label='Save Project Command',command=save_config)
+        for label,value in (('Interactive Shell','shell'),('Command Output','runner')):
+            view_menu.add_radiobutton(label=label,value=value,variable=view_mode,command=display_mode)
+        settings_menu.add_command(label='Appearance…',command=show_settings)
+        settings_menu.add_command(label='Shell…',command=shell_settings)
+        content=ttk.Frame(window);content.pack(fill='both',expand=True)
+        interactive=InteractiveTerminal(content,root,status,appearance,shell_var.get)
+        runner_frame=ttk.Frame(content)
+        output=tk.Text(runner_frame,wrap='none',font=terminal_font,background=appearance['background'],foreground=appearance['foreground'],borderwidth=0,padx=10,pady=8,state='disabled')
+        output._terminal_role='runner';output.grid(row=0,column=0,sticky='nsew');runner_frame.columnconfigure(0,weight=1);runner_frame.rowconfigure(0,weight=1)
+        scroll=ttk.Scrollbar(runner_frame,command=output.yview);scroll.grid(row=0,column=1,sticky='ns');output.configure(yscrollcommand=scroll.set)
+        horizontal=ttk.Scrollbar(runner_frame,orient='horizontal',command=output.xview);horizontal.grid(row=1,column=0,sticky='ew');output.configure(xscrollcommand=horizontal.set)
+        ttk.Label(window,textvariable=status,wraplength=520).pack(fill='x',padx=8,pady=4)
+        apply_appearance();load_project(project_directory());display_mode();poll()
+        root.after_idle(lambda:interactive.start(folder_var.get()) if not shutting_down.is_set() and window.winfo_exists() else None)
+        return window
 
     def show_settings():
         nonlocal settings_window, appearance
-        if window is None or not window.winfo_exists(): show()
+        if api._editor.closing:return
+        if window is None or not window.winfo_exists():show();root.after(200,show_settings);return
         if settings_window is not None and settings_window.winfo_exists():
             settings_window.lift(); return
         settings_window = dialog = tk.Toplevel(window)
@@ -434,3 +516,10 @@ def register(api):
     if hasattr(api, "provide_service"):
         api.provide_service("show", show)
         api.provide_service("get_settings", lambda: validate_settings(appearance))
+        api.provide_service('run_command',run_command)
+        api.provide_service('stop_command',stop)
+        api.provide_service('command_settings',command_settings)
+        api.provide_service('appearance',show_settings)
+        api.provide_service('send_input',lambda value:interactive.send(value) if interactive else False)
+        api.provide_service('start_shell',start_shell)
+        api.provide_service('stop_shell',lambda:interactive.stop() if interactive else None)

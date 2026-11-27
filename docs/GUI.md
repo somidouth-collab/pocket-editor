@@ -8,7 +8,7 @@ Click the gear at the bottom of the left rail, or use **Settings → Vertical pl
 
 Click a vertical tab to show its panel. Click it again, or the panel's ×, to collapse it and give the editor more space. Drag the divider to resize. Hover or keyboard-focus a tab to see its full name; Tab and Enter/Space also work. The rail scrolls with the mouse wheel when many tabs are selected.
 
-Project Explorer, Search & Replace, AI Assistant, Codex, Git, Terminal, and Team Project support docked panels. Switching tabs preserves each panel's input and running work. Existing standalone windows remain usable; selecting their tab offers their commands rather than duplicating a running tool. Other plugins show an action list, and actions run only when explicitly clicked. Simply selecting Python Tools or a text-transform plugin does not change your document.
+Project Explorer, Web Tools, Search & Replace, AI Assistant, Codex, Git, Terminal, and Team Project support docked panels. Switching tabs preserves each panel's input and running work. Existing standalone windows remain usable; selecting their tab offers their commands rather than duplicating a running tool. Other plugins show an action list, and actions run only when explicitly clicked. Simply selecting Python Tools or a text-transform plugin does not change your document.
 
 The menu bar’s Plugins button opens a fixed-size, themed window with vertical scrolling. Select a plugin to see its actions, or right-click a vertical tab. Escape closes the window. The horizontal plugin toolbar has been removed. Plugin and document tabs have separate purposes: document tabs select files, and vertical tabs select tools.
 
@@ -143,3 +143,13 @@ Right-click inside a document for Undo/Redo, Cut, Copy, Paste, Delete Selection,
 Right-click inside a selection preserves it. Clicking elsewhere moves the caret and clears the selection without editing the text. Split panes use the document you actually clicked. Actions that need a selection, undo history, a saved path, or an enabled plugin are disabled when unavailable. Closing a file retains the normal unsaved-change prompt.
 
 Shift+F10 or the Menu key opens the same menu at the caret without changing the selection. macOS also supports Control-click. Escape dismisses the menu. Existing Project Explorer item menus remain available.
+
+## Smart external-file monitoring
+
+Pocket Editor checks open saved files in an isolated helper process about every two seconds. It waits briefly for a changed file to settle and verifies its content hash, so timestamp-only touches and the editor's own Save do not trigger reload notices. It also detects atomic replacement saves. Small files get an occasional content recheck even if metadata is unchanged.
+
+Clean UTF-8 documents reload automatically, preserving the cursor and scroll position where possible, UTF-8 BOM and line endings. A banner and ↻ tab marker show which files changed, including inactive tabs; monitoring does not switch focus. The previous text remains available through Undo.
+
+Documents with unsaved text or rich formatting are kept intact. Their banner offers **Reload** (with confirmation before replacing edits) and **Keep Mine** (keeps the draft and acknowledges the disk version). × dismisses the notice. Save independently checks the current disk version and asks before overwriting an unacknowledged external change. The normal explicit Save policy still controls file writes.
+
+Deleted, renamed, unreadable or invalid-UTF-8 files never clear the open text. Missing/unreadable copies are retained as drafts. Files larger than 8 MB show a notice and require explicit Reload rather than automatic replacement; their hashes are checked in chunks when metadata changes. Recovered drafts retain their last known disk baseline when available. Open menus and modal dialogs defer automatic refreshes. Closing a document or the editor cancels its pending reload updates and terminates the owned checker process.

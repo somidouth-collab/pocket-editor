@@ -13,11 +13,11 @@ sudo apt update
 sudo apt install python3 python3-tk unzip
 ```
 
-Download `Pocket-Editor-2026.11.26.zip` from the release page, then run:
+Download `Pocket-Editor-2026.11.27.zip` from the release page, then run:
 
 ```sh
-unzip Pocket-Editor-2026.11.26.zip
-cd Pocket-Editor-2026.11.26
+unzip Pocket-Editor-2026.11.27.zip
+cd Pocket-Editor-2026.11.27
 python3 -B pocket_editor.py
 ```
 

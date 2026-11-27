@@ -30,3 +30,6 @@ fusionphp_tools_settings.json
 
 # Local FusionPHP editor preferences
 fusionphp_tools_settings.json
+
+# Local Web Tools preferences
+web_tools_settings.json

@@ -13,7 +13,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_DOCS = {'README.md','TEAM_WORK.md','PLUGIN_DEVELOPMENT.md','AUTHOR.md','RELEASE_NOTES.md','PUBLISHING.md','INSTALL.md','PYPI_PUBLISHING.md','LICENSE','LICENSE.md','.gitignore'}
-CORE_MODULES = {'pocket_editor.py','editor_about.py','editor_session.py','command_palette.py','quick_open.py','split_editor.py','plugin_manager.py','plugin_sidebar.py'}
+CORE_MODULES = {'file_probe.py','external_files.py', 'pocket_editor.py','editor_about.py','editor_session.py','command_palette.py','quick_open.py','split_editor.py','plugin_manager.py','plugin_sidebar.py'}
 EXTENSIONS = {'.fpf','.c','.cc','.cpp','.cxx','.h','.hpp','.py','.md','.html','.css','.js','.cjs','.mjs','.php','.json','.txt','.png','.svg','.toml','.in','.yml','.yaml'}
 SKIP_DIRS = {'.git','__pycache__','node_modules','cache','dist','build','audit','old','testp','.venv','venv'}
 
@@ -40,7 +40,7 @@ def collect_files(root=ROOT):
                 if not eligible(path) or path.suffix not in EXTENSIONS:continue
                 relative=path.relative_to(root)
                 if directory=='pocket_editor_plugins' and path.suffix!='.py':continue
-                if directory=='tools' and path.suffix=='.json' and relative.as_posix() not in ('tools/php/package.json','tools/php/package-lock.json'):continue
+                if directory=='tools' and path.suffix=='.json' and relative.as_posix() not in ('tools/php/package.json','tools/php/package-lock.json','tools/web/package.json','tools/web/package-lock.json'):continue
                 files.append(path)
     return sorted(set(files),key=lambda path:path.relative_to(root).as_posix())
 

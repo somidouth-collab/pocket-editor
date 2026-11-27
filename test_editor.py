@@ -403,30 +403,28 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(e.plugin_apis['word_count'].get_text(), 'preserve edited')
 
     def test_terminal_output_fallback_stop_and_shutdown(self):
-        e=self.editor; e.set_document(self.folder/'file.txt','')
-        self.command('Project Terminal'); window=self.window('Project Terminal')
-        folder=self.entry(window,0); command=self.entry(window,1)
-        self.assertEqual(folder.get(),str(self.folder))
-        self.set_entry(command, f'"{sys.executable}" -c "print(\'hello 😀\')"')
-        self.button('Run'); self.pump(.6)
-        output=next(w for w in widgets(window) if isinstance(w,tk.Text))
+        e=self.editor;e.set_document(self.folder/'file.txt','')
+        self.command('Project Terminal')
+        self.until(lambda:'project_terminal' in e.plugin_sidebar.hosts and 'project_terminal' not in e.plugin_sidebar.pending)
+        window=e.plugin_sidebar.hosts['project_terminal']._panel_widget
+        api=e.plugin_apis['project_terminal']
+        output=next(w for w in widgets(window) if isinstance(w,tk.Text) and getattr(w,'_terminal_role','')=='runner')
+        def run(command):api.call_service('project_terminal.run_command',command,str(self.folder))
+        run(f'"{sys.executable}" -c "print(\'hello 😀\')"');self.pump(.6)
         self.assertIn('hello 😀',output.get('1.0','end'))
         self.assertIn('[Exit code 0]',output.get('1.0','end'))
-        self.set_entry(command, f'"{sys.executable}" -c "import sys; sys.stdout.write(\'x\'*1200000)"')
-        self.button('Run'); self.pump(1.5)
-        self.until(lambda: "[Exit code 0]" in output.get("end-3l", "end"))
+        run(f'"{sys.executable}" -c "import sys; sys.stdout.write(\'x\'*1200000)"');self.pump(1.5)
+        self.until(lambda:"[Exit code 0]" in output.get('end-3l','end'))
         self.assertLessEqual(int(output.count('1.0','end-1c','chars')[0]),200000)
         marker=self.folder/'pid'
-        self.set_entry(command, f'"{sys.executable}" -c "import os,time; open(\'{marker}\',\'w\').write(str(os.getpid())); time.sleep(60)"')
-        self.button('Run'); self.until(marker.exists); pid=int(marker.read_text())
-        self.button('Stop'); self.pump(.4)
+        command=f'"{sys.executable}" -c "import os,time; open(\'{marker}\',\'w\').write(str(os.getpid())); time.sleep(60)"'
+        run(command);self.until(marker.exists);pid=int(marker.read_text())
+        api.call_service('project_terminal.stop_command');self.pump(.4)
         if os.name=='posix':
             stat=Path(f'/proc/{pid}/stat')
             self.assertTrue(not stat.exists() or stat.read_text().split()[2]=='Z')
-        marker.unlink()
-        self.set_entry(command, f'"{sys.executable}" -c "import os,time; open(\'{marker}\',\'w\').write(str(os.getpid())); time.sleep(60)"')
-        self.button('Run'); self.until(marker.exists); pid=int(marker.read_text())
-        e.buffer.edit_modified(False); e.quit()
+        marker.unlink();run(command);self.until(marker.exists);pid=int(marker.read_text())
+        e.buffer.edit_modified(False);e.quit()
         if os.name=='posix':
             stat=Path(f'/proc/{pid}/stat')
             self.assertTrue(not stat.exists() or stat.read_text().split()[2]=='Z')

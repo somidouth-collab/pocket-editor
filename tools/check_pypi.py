@@ -21,12 +21,12 @@ def check(directory):
                 names = archive.getnames()
         for name in names:
             parts = PurePosixPath(name).parts
-            assert not any(part in {"node_modules", "__pycache__", "audit", "testp", ".git"} for part in parts), name
+            assert not any(part in {"node_modules", ".venv", "__pycache__", "audit", "testp", ".git"} for part in parts), name
             base = parts[-1]
             assert not base.startswith((".env", "pocket_editor_session")), name
             assert not base.endswith((".team-invite", "_settings.json", ".pyc")), name
             assert base != "pocket_editor_about.json", name
-        for required in ["pocket_editor.py", "plugin_sidebar.py", "docs/GUI.md", "pocket_editor_plugins/_docking.py", "docs/index.html", "docs/CODEX.md", "docs/LOADING.md",
+        for required in ["file_probe.py", "external_files.py", "pocket_editor_plugins/web_tools.py", "pocket_editor_plugins/_web_tools.py", "tools/web/bridge.cjs", "tools/web/package.json", "tools/web/package-lock.json", "pocket_editor_plugins/_terminal_session.py", "pocket_editor_plugins/_terminal_view.py", "tools/terminal/host.py", "tools/terminal/requirements.txt", "pocket_editor.py", "plugin_sidebar.py", "docs/GUI.md", "pocket_editor_plugins/_docking.py", "docs/index.html", "docs/CODEX.md", "docs/LOADING.md",
                          "pocket_editor_plugins/cpp_tools.py", "pocket_editor_plugins/_cpp_language.py", "pocket_editor_plugins/_cpp_debug.py", "docs/C_CPP.md", "examples/cpp/main.cpp",
                          "pocket_editor_plugins/codex_assistant.py", "pocket_editor_plugins/loading_indicator.py", "pocket_editor_plugins/ai_assistant.py",
                          "pocket_editor_plugins/team_project.py", "INSTALL.md"]:

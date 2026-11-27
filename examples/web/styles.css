@@ -1,0 +1,36 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+  background: #10161e;
+  color: #e6edf5;
+}
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+}
+.card {
+  max-width: 40rem;
+  margin: 1rem;
+  padding: 3rem;
+  border: 1px solid #30455c;
+  border-radius: 1rem;
+  background: #182432;
+}
+.eyebrow {
+  color: #48b6ff;
+  letter-spacing: 0.15em;
+}
+button {
+  border: 0;
+  border-radius: 0.5rem;
+  padding: 0.8rem 1.2rem;
+  background: #158cdb;
+  color: white;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 3px solid white;
+  outline-offset: 4px;
+}

@@ -14,8 +14,8 @@ THEMES = {
     "Dracula": ("#282a36", "#f8f8f2", "#44475a", "#6272a4", "#ff79c6", "#f1fa8c", "#6272a4", "#bd93f9", "#50fa7b"),
     "Solarized Dark": ("#002b36", "#839496", "#073642", "#586e75", "#859900", "#2aa198", "#586e75", "#d33682", "#b58900"),
 }
-LANGUAGES = ("Auto", "Python", "JavaScript", "C/C++", "JSON", "PHP", "FusionPHP", "Plain text")
-EXTENSIONS = {".fpf": "FusionPHP", ".py": "Python", ".pyw": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
+LANGUAGES = ("Auto", "Python", "HTML", "CSS", "JavaScript", "C/C++", "JSON", "PHP", "FusionPHP", "Plain text")
+EXTENSIONS = {".html":"HTML", ".htm":"HTML", ".css":"CSS", ".scss":"CSS", ".less":"CSS", ".mjs":"JavaScript", ".cjs":"JavaScript", ".fpf": "FusionPHP", ".py": "Python", ".pyw": "Python", ".pyi": "Python", ".js": "JavaScript", ".jsx": "JavaScript",
               ".ts": "JavaScript", ".tsx": "JavaScript", ".c": "C/C++", ".h": "C/C++",
               ".cpp": "C/C++", ".hpp": "C/C++", ".cc": "C/C++", ".json": "JSON", ".php": "PHP", ".phtml": "PHP", ".php8": "PHP"}
 WORDS = set(("if else for while do break continue return switch case default class struct enum "
@@ -35,6 +35,24 @@ def spans(source, language):
     if language == "FusionPHP":
         from pocket_editor_plugins._fusionphp import highlight_spans
         yield from highlight_spans(source)
+    elif language == "HTML":
+        # Match complete markup first so a literal > in text or a quoted
+        # attribute is not mistaken for a tag delimiter.
+        markup = re.compile(r"<!--[\s\S]*?-->|</?[A-Za-z][\w:-]*(?:[^<>\"']|\"[^\"]*\"|'[^']*')*>|<!DOCTYPE\b[^>]*>", re.I)
+        attributes = re.compile(r'(?P<string>"[^"\n]*(?:\n[^"\n]*)*"|\'[^\']*\')|(?P<function>[A-Za-z_:][\w:.-]*(?=\s*=))')
+        for tag in markup.finditer(source):
+            if tag.group().startswith('<!--'):
+                yield 'comment', tag.start(), tag.end()
+                continue
+            opening = re.match(r'<(?:/?[\w:-]+|![\w:-]+)', tag.group())
+            if opening:yield 'keyword', tag.start(), tag.start()+opening.end()
+            closing = re.search(r'/?>$', tag.group())
+            yield 'keyword', tag.start()+closing.start(), tag.end()
+            for match in attributes.finditer(tag.group(), opening.end() if opening else 0, closing.start()):
+                yield match.lastgroup, tag.start()+match.start(), tag.start()+match.end()
+    elif language == "CSS":
+        pattern = re.compile(r'(?P<comment>/\*[\s\S]*?\*/)|(?P<string>"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')|(?P<function>[\w-]+(?=\s*:))|(?P<number>#[0-9a-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|em|rem|vh|vw|s|%)?)|(?P<keyword>[@.#][\w-]+)')
+        for match in pattern.finditer(source):yield match.lastgroup, match.start(), match.end()
     elif language == "Python":
         lines = source.splitlines(keepends=True)
         offsets = [0]

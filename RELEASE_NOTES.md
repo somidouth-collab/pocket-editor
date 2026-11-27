@@ -1,3 +1,21 @@
+# Pocket Editor — 2026.11.27
+
+Created by **Somi Douth** · somidouth@gmail.com
+
+- Added Web Tools for local HTML/CSS/JavaScript formatting and context-aware autocomplete, plus JSX/TypeScript, SCSS/LESS, syntax checks, snippets and HTML script/style completion. Includes tool setup, saved preferences, Help and a web demo.
+- Fixed HTML formatting so closing tag brackets stay attached, preserving inline whitespace; verified repeat formatting and tag structure across all 18 HTML Help pages.
+- Matched HTML opening/closing tag delimiter colors while preserving literal brackets in text and attribute values.
+- Upgraded Project Terminal with a persistent interactive PTY shell, input, resize, history, Tab completion, Ctrl+C, ANSI rendering, scrollback and alternate-screen support. One menu bar groups terminal actions, project commands, view options and existing settings; the batch command runner remains available.
+- Fixed terminal selection visibility above ANSI colors and stable selection/menu behavior during live output. Right-click menus open on release and preserve selection.
+- Added background external-file monitoring: clean UTF-8 files refresh automatically, unsaved edits receive Reload/Keep Mine notices, changed tabs show an indicator, and Save checks disk content before overwriting. Includes atomic-replacement detection, deleted-file protection, draft baselines and cancellable check processes.
+- Updated setup instructions, local Help, examples, packaging and regression coverage.
+
+The core editor still needs only Python and Tk. Web Tools additionally needs Node.js LTS and its Install / Repair Tools action. Interactive Terminal uses its optional Install / Repair Engine action; the existing command runner works without that engine. Downloaded dependencies and local runtime environments are not bundled in source/PyPI packages.
+
+Upgrade with `pipx upgrade pocket-editor`, then restart. Runtime directories are version-specific; previous drafts and preferences remain in the earlier runtime folder. Full Windows 10 manual validation remains outstanding. This terminal is a lightweight VT-style emulator, not a complete xterm replacement. License remains undecided.
+
+---
+
 # Pocket Editor — 2026.11.26
 
 Created by **Somi Douth** · somidouth@gmail.com

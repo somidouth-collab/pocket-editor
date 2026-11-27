@@ -61,6 +61,7 @@ class EditorSession:
                 active = len(entries)
             item = {'path': str(path) if path else None, 'cursor': text.index('insert'),
                     'view': text.yview()[0], 'newline': document['newline'], 'bom': document['bom']}
+            if document.get('disk_digest'):item['disk_digest']=document['disk_digest']
             if text.edit_modified() or document['rich_dirty'] or path is None:
                 item.update(text=text.get('1.0', 'end-1c'), dirty=bool(text.edit_modified()),
                             rich_dirty=document['rich_dirty'], styles=[])
@@ -154,6 +155,11 @@ class EditorSession:
                 editor.open_path(path)
                 if editor.path != path:
                     continue
+            if draft and path is not None:
+                digest=item.get('disk_digest')
+                if not isinstance(digest,str) or len(digest)!=64 or any(ch not in '0123456789abcdef' for ch in digest):digest=None
+                editor.remember_document()
+                editor.external_files.track(editor.active_document,digest=digest)
             restored[index] = editor.active_document
             try:
                 editor.buffer.mark_set('insert', item.get('cursor', '1.0'))

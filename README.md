@@ -42,7 +42,7 @@ Python files in `pocket_editor_plugins/` define `register(api)`. Plugin IDs are 
 
 The API supports commands, text access/replacement, paths, events, services, and discovery. `api.list_services()` returns qualified service names. `api.on_cleanup(callback)` registers cleanup for failed registration or editor exit. Event callbacks and service calls execute on the GUI thread. Event payload key `source` is reserved. Plugins are trusted Python code; plugins that access private editor internals must register cleanup for their own side effects.
 
-The terminal is an output-only shell runner. Its output queue and retained text are bounded; retained text is limited to 200,000 characters and individual long lines retain their last 8,192 characters. Stop and application exit terminate the process group on POSIX. Deliberately detached processes are outside this guarantee. Windows process-tree handling needs platform verification.
+The terminal includes a persistent interactive PTY shell and a separate output-only command runner. Its output queue and retained text are bounded; retained text is limited to 200,000 characters and individual long lines retain their last 8,192 characters. Stop and application exit terminate the process group on POSIX. Deliberately detached processes are outside this guarantee. Windows process-tree handling needs platform verification.
 
 Regex searches run in a disposable Python process with a 0.5-second execution timeout and a 100,000-match limit. A search may briefly pause the GUI while that bounded operation completes. Syntax highlighting pauses above 300,000 document characters.
 
@@ -176,11 +176,11 @@ AI Assistant source lives in `pocket_editor_plugins/ai_assistant.py`. See [its g
 
 ## Project Terminal colors and portable defaults
 
-Choose **Project Terminal → Settings…** inside the terminal, or search **Project Terminal Settings…** in the command palette. Editor Dark, Light, and High Contrast presets provide a starting point. Customize background, normal text, command headers, status messages, error exit messages, and all 16 ANSI base/bright colors. Font family/size, output encoding, ANSI rendering, and optional force-color behavior are user settings. Save & apply persists them under `_appearance` in `project_terminal_settings.json`, preserving saved per-project commands.
+Choose **Settings → Appearance…** in the terminal’s single menu bar, or search **Project Terminal Settings…** in the command palette. Editor Dark, Light, and High Contrast presets provide a starting point. Customize background, normal text, command headers, status messages, error exit messages, and all 16 ANSI base/bright colors. Font family/size, output encoding, ANSI rendering, and optional force-color behavior are user settings. Save & apply persists them under `_appearance` in `project_terminal_settings.json`, preserving saved per-project commands.
 
 Portable defaults use UTF-8 decoding, the operating system's monospace font, ANSI rendering enabled, and force-color disabled. The existing system-shell selection stays native to the OS; no Bash-only commands are introduced. If a chosen font is unavailable on another computer, the system monospace font is used. For Windows tools that emit a legacy encoding, choose locale, cp1252, cp850, or cp437 as appropriate. Python child processes receive the selected output encoding. Encoding and force-color changes apply to the next process; appearance changes recolor retained output immediately.
 
-The renderer handles standard/bright ANSI colors, indexed 256-color and RGB colors, bold, underline, reverse, resets, and sequences split across read chunks. Other terminal controls, including title/clipboard/hyperlink escape commands, are discarded rather than executed; carriage-return progress updates become separate lines. This remains an output-only runner, not a full interactive terminal emulator. Standard error remains merged with standard output; category coloring uses recognizable text patterns rather than claiming to identify the originating stream. Nonzero exit markers use the configured error color.
+The renderer handles standard/bright ANSI colors, indexed 256-color and RGB colors, bold, underline, reverse, resets, and sequences split across read chunks. Other terminal controls, including title/clipboard/hyperlink escape commands, are discarded rather than executed; carriage-return progress updates become separate lines. These details describe Command Output mode. Interactive Shell mode instead interprets terminal cursor movement, carriage-return updates, clear-screen controls and alternate-screen switches through its VT-style screen emulator. Standard error remains merged with standard output; category coloring uses recognizable text patterns rather than claiming to identify the originating stream. Nonzero exit markers use the configured error color.
 
 Programs may suppress colors when output is piped. Enable **Request colored output from programs (force color)** to set FORCE_COLOR, CLICOLOR_FORCE, and TERM for the child; it also overrides NO_COLOR for that process. Some tools still require their own `--color=always` option. Disabling ANSI interpretation removes ANSI styling from retained text as well as future output. Output remains bounded to 200,000 characters and 8,192 characters per long line, with at most 512 distinct ANSI styles. No OS-specific ANSI rendering library is required.
 
@@ -287,3 +287,9 @@ Explorer menus open on mouse release and remain posted until an explicit action 
 ## FusionPHP .fpf templates (local addition)
 
 **FusionPHP Tools** adds template highlighting through Code Theme, conservative formatting, context-aware completion, syntax checks, and red zigzag error marks. It uses an offline parser based on the local FusionPHP compiler, without running application PHP. Open it from Plugins or pin its vertical tab. See the [FusionPHP guide](docs/FUSIONPHP.md).
+
+## HTML, CSS and JavaScript
+
+The local **Web Tools** plugin adds Prettier formatting, HTML/CSS language-service completion and TypeScript-powered JavaScript autocomplete, including JSX/TSX. Install Node.js LTS, then use **Web Tools → Install / Repair Tools**. Ctrl+Shift+F formats and Ctrl+Space completes. See [Web Tools setup and usage](docs/WEB_TOOLS.md).
+
+See [Interactive terminal and unified menus](docs/TERMINAL.md) for shell setup, keyboard controls, the retained command runner and appearance settings.

@@ -1,6 +1,6 @@
 # Publishing Pocket Editor on PyPI
 
-PyPI package: `pocket-editor` · version: `2026.11.26` · owner account: `somidouth`.
+PyPI package: `pocket-editor` · version: `2026.11.27` · owner account: `somidouth`.
 
 The project owner has left the license undecided. No license grant is added by this package.
 
